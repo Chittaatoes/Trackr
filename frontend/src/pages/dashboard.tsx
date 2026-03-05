@@ -39,7 +39,7 @@ import {
   Eye, EyeOff, X, Lightbulb, Target,
   BarChart3, Plus, Award,
   ArrowDownLeft, ArrowUpRight, ArrowLeftRight,
-  PiggyBank, CreditCard, FileText, LineChart, Camera,
+  PiggyBank, CreditCard, FileText, LineChart,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatCurrency, getXpForNextLevel, EXPENSE_CATEGORY_GROUPS, INCOME_CATEGORIES, getTierKey } from "@/lib/constants";
@@ -58,7 +58,6 @@ import { MilestoneFlame, getMilestoneLevel, getMilestoneName } from "@/features/
 import { LevelUpCelebration } from "@/features/gamification/level-up-celebration";
 import { SetupFirstAccountModal } from "@/components/setup-first-account-modal";
 import { MonthlyActivityCalendar } from "@/components/monthly-activity-calendar";
-import { ScanPanel } from "@/components/scan-panel";
 
 // === DASHBOARD API RESPONSE TYPES ===
 // These interfaces match the JSON returned by /api/dashboard, /api/smart-save, /api/spending-insight
@@ -596,7 +595,7 @@ function TransactionForm({
         }
         mutation.mutate(data);
       })} className="flex flex-col max-md:flex-1 max-md:min-h-0">
-        <div className="space-y-5 px-6 max-md:px-6 md:px-0 max-md:flex-1 max-md:overflow-y-auto scrollbar-hide max-md:pb-4">
+        <div className="space-y-5 px-6 max-md:px-6 md:px-0 max-md:flex-1 max-md:overflow-y-auto max-md:pb-4">
           <FormField
             control={form.control}
             name="amount"
@@ -855,7 +854,7 @@ function SavingsForm({ onClose, t }: { onClose: () => void; t: any }) {
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit((data) => mutation.mutate(data))} className="flex flex-col max-md:flex-1 max-md:min-h-0">
-        <div className="space-y-5 px-6 max-md:px-6 md:px-0 max-md:flex-1 max-md:overflow-y-auto scrollbar-hide max-md:pb-4">
+        <div className="space-y-5 px-6 max-md:px-6 md:px-0 max-md:flex-1 max-md:overflow-y-auto max-md:pb-4">
           <FormField
             control={form.control}
             name="goalId"
@@ -1036,7 +1035,7 @@ function DebtPaymentForm({ onClose, t }: { onClose: () => void; t: any }) {
         }
         mutation.mutate(data);
       })} className="flex flex-col max-md:flex-1 max-md:min-h-0">
-        <div className="space-y-5 px-6 max-md:px-6 md:px-0 max-md:flex-1 max-md:overflow-y-auto scrollbar-hide max-md:pb-4">
+        <div className="space-y-5 px-6 max-md:px-6 md:px-0 max-md:flex-1 max-md:overflow-y-auto max-md:pb-4">
           <FormField
             control={form.control}
             name="liabilityId"
@@ -1211,18 +1210,15 @@ function TypeTabSelector({ current, onChange, t }: { current: TxTabType; onChang
 
 function AddActionDialog({ open, onClose, t, onStreakTriggered, initialAction }: { open: boolean; onClose: () => void; t: any; onStreakTriggered?: () => void; initialAction?: ActionType | null }) {
   const [selectedTab, setSelectedTab] = useState<TxTabType>("expense");
-  const [scanMode, setScanMode] = useState(false);
 
   useEffect(() => {
     if (open) {
       const validTabs: TxTabType[] = ["income", "expense", "transfer", "savings", "debt_payment"];
       setSelectedTab(validTabs.includes(initialAction as TxTabType) ? (initialAction as TxTabType) : "expense");
-      setScanMode(false);
     }
   }, [open, initialAction]);
 
   const handleClose = () => {
-    setScanMode(false);
     onClose();
     if (onStreakTriggered) onStreakTriggered();
   };
@@ -1230,46 +1226,23 @@ function AddActionDialog({ open, onClose, t, onStreakTriggered, initialAction }:
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
       <DialogContentBottomSheet>
-        <DialogHeader className="px-6 max-md:px-6 md:px-0 pt-1 md:pt-0 shrink-0">
+        <DialogHeader className="px-6 max-md:px-6 md:px-0 pt-1 md:pt-0">
           <DialogTitle className="text-lg">{t.dashboard.addActionTitle}</DialogTitle>
           <DialogDescription>{t.transactions.dialogDesc}</DialogDescription>
         </DialogHeader>
 
-        {scanMode ? (
-          <ScanPanel onBack={() => setScanMode(false)} onSave={handleClose} />
-        ) : (
-          <>
-            <TypeTabSelector current={selectedTab} onChange={setSelectedTab} t={t} />
+        <TypeTabSelector current={selectedTab} onChange={setSelectedTab} t={t} />
 
-            {(selectedTab === "income" || selectedTab === "expense" || selectedTab === "transfer") && (
-              <TransactionForm key={selectedTab} txType={selectedTab} onClose={handleClose} t={t} />
-            )}
+        {(selectedTab === "income" || selectedTab === "expense" || selectedTab === "transfer") && (
+          <TransactionForm key={selectedTab} txType={selectedTab} onClose={handleClose} t={t} />
+        )}
 
-            {selectedTab === "savings" && (
-              <SavingsForm key="savings" onClose={handleClose} t={t} />
-            )}
+        {selectedTab === "savings" && (
+          <SavingsForm key="savings" onClose={handleClose} t={t} />
+        )}
 
-            {selectedTab === "debt_payment" && (
-              <DebtPaymentForm key="debt_payment" onClose={handleClose} t={t} />
-            )}
-
-            <div className="shrink-0 px-6 max-md:px-6 md:px-0 pb-4 pt-2 border-t border-border/40">
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1.5">Cara Cepat</p>
-              <button
-                type="button"
-                onClick={() => setScanMode(true)}
-                className="w-full flex items-center gap-2.5 py-2 px-3 rounded-xl border border-dashed border-border hover:bg-violet-500/5 hover:border-violet-400/40 transition-colors group"
-              >
-                <div className="w-7 h-7 rounded-lg bg-violet-500/10 flex items-center justify-center group-hover:bg-violet-500/15 transition-colors shrink-0">
-                  <Camera className="w-3.5 h-3.5 text-violet-500" />
-                </div>
-                <div className="text-left">
-                  <p className="text-xs font-semibold text-foreground">📷 Scan Struk</p>
-                  <p className="text-[10px] text-muted-foreground leading-tight">Foto struk, transaksi otomatis</p>
-                </div>
-              </button>
-            </div>
-          </>
+        {selectedTab === "debt_payment" && (
+          <DebtPaymentForm key="debt_payment" onClose={handleClose} t={t} />
         )}
       </DialogContentBottomSheet>
     </Dialog>

@@ -66,6 +66,8 @@ const BUDGET_CATEGORIES = {
   ],
   savings: [
     { key: "savings", emoji: "💰", i18nKey: "catSavings" },
+    { key: "insurance", emoji: "🛡️", i18nKey: "catInsurance" },
+    { key: "installment", emoji: "💳", i18nKey: "catInstallment" },
   ],
   investment: [
     { key: "investment", emoji: "📈", i18nKey: "catInvestment" },
@@ -320,9 +322,9 @@ function SavingsGoalGroup({
             </div>
           ) : (
             goals.map((goal) => {
-              const current = Number(goal.currentAmount);
+              const deposited = depositsByGoal[goal.name] ?? 0;
               const target = Number(goal.targetAmount);
-              const goalPct = target > 0 ? Math.min((current / target) * 100, 100) : 0;
+              const goalPct = target > 0 ? Math.min((deposited / target) * 100, 100) : 0;
 
               return (
                 <div
@@ -342,8 +344,7 @@ function SavingsGoalGroup({
                     </div>
                   </div>
                   <div className="text-right shrink-0">
-                    <p className="text-sm font-mono font-medium text-foreground/80">{formatCurrency(current)}</p>
-                    <p className="text-[11px] font-mono text-muted-foreground">{formatCurrency(target)}</p>
+                    <p className="text-sm font-mono font-medium text-foreground/80">{formatCurrency(deposited)}</p>
                   </div>
                 </div>
               );
