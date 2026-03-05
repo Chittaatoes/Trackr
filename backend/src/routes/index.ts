@@ -853,7 +853,10 @@ app.post("/api/transactions", isAuthenticated, async (req, res) => {
       if (debtRatio > cautionLimit) status = "danger";
       else if (debtRatio > healthyLimit) status = "caution";
 
-      const monthlyIncome = profile?.monthlyIncome ? parseFloat(String(profile.monthlyIncome)) : 0;
+      const budgetPlanForIncome = await storage.getBudgetPlan(userId, format(new Date(), "yyyy-MM"));
+      const monthlyIncome = budgetPlanForIncome
+        ? Number(budgetPlanForIncome.income)
+        : (profile?.monthlyIncome ? parseFloat(String(profile.monthlyIncome)) : 0);
       const totalMonthlyInstallments = liabs.reduce((s, l) => {
         if (l.monthlyPayment) return s + parseFloat(String(l.monthlyPayment));
         return s;
@@ -1248,6 +1251,209 @@ app.post("/api/transactions", isAuthenticated, async (req, res) => {
   });
 
 
+  // ===== BUDGET ALLOCATIONS =====
+  const budgetAllocationSchema = z.object({
+    category: z.string().min(1, "Category is required"),
+    budgetLimit: z.union([z.string(), z.number()])
+      .transform((v) => Number(v))
+      .refine((v) => !isNaN(v) && v > 0, "Budget limit must be a positive number")
+      .transform(String),
+    month: z.string().regex(/^\d{4}-\d{2}$/, "Month must be in YYYY-MM format"),
+    note: z.string().nullable().optional(),
+  });
+
+  app.get("/api/budget", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const month = (req.query.month as string) || format(new Date(), "yyyy-MM");
+      const allocations = await storage.getBudgetAllocationsByMonth(userId, month);
+      res.json(allocations);
+    } catch (error) {
+      console.error("Error fetching budget allocations:", error);
+      res.status(500).json({ message: "Failed to fetch budget allocations" });
+    }
+  });
+
+  app.post("/api/budget", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const parsed = budgetAllocationSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.errors[0].message });
+
+      const { category, budgetLimit, month, note } = parsed.data;
+      const allocation = await storage.upsertBudgetAllocation({
+        userId,
+        category,
+        budgetLimit,
+        month,
+        note: note || null,
+      });
+      res.json(allocation);
+    } catch (error) {
+      console.error("Error creating budget allocation:", error);
+      res.status(500).json({ message: "Failed to create budget allocation" });
+    }
+  });
+
+  app.delete("/api/budget/:id", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const id = parseInt(req.params.id);
+      await storage.deleteBudgetAllocation(id, userId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting budget allocation:", error);
+      res.status(500).json({ message: "Failed to delete budget allocation" });
+    }
+  });
+
+  app.get("/api/budget/summary", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const month = (req.query.month as string) || format(new Date(), "yyyy-MM");
+      const profile = await ensureProfile(userId);
+      const monthlyIncome = Number(profile.monthlyIncome || 0);
+
+      const allocations = await storage.getBudgetAllocationsByMonth(userId, month);
+      const totalAllocated = allocations.reduce((s, a) => s + Number(a.budgetLimit), 0);
+
+      const monthStart = `${month}-01`;
+      const [year, mon] = month.split("-").map(Number);
+      const lastDay = new Date(year, mon, 0).getDate();
+      const monthEnd = `${month}-${String(lastDay).padStart(2, "0")}`;
+
+      const txs = await storage.getTransactionsByDateRange(userId, monthStart, monthEnd);
+      const expenses = txs.filter(t => t.type === "expense");
+
+      const depositsByGoal: Record<string, number> = {};
+      txs
+        .filter(t => t.category === "Savings" && t.note?.startsWith("Deposit to "))
+        .forEach(t => {
+          const goalName = t.note!.replace("Deposit to ", "");
+          depositsByGoal[goalName] = (depositsByGoal[goalName] || 0) + Number(t.amount);
+        });
+
+      const txCategoryToBudgetKey: Record<string, string[]> = {
+        "Food & Drinks": ["food", "snacks"],
+        "Transportation": ["transport"],
+        "Shopping": ["online_shopping", "lifestyle"],
+        "Entertainment": ["entertainment", "hangout", "hobby"],
+        "Bills & Utilities": ["electricity", "water"],
+        "Health": ["health"],
+        "Education": ["education"],
+        "Travel": ["transport"],
+        "Investment": ["investment"],
+        "Debt Payment": ["loan", "installment"],
+        "Insurance": ["insurance"],
+        "Tax": ["tax"],
+        "Savings": ["savings"],
+        "Other": [],
+        "Housing": ["housing"],
+        "Electricity": ["electricity"],
+        "Water": ["water"],
+        "Hangout": ["hangout"],
+        "Snacks": ["snacks"],
+        "Hobby": ["hobby"],
+        "Lifestyle": ["lifestyle"],
+        "Other Needs": [],
+      };
+
+      const spentByBudgetKey: Record<string, number> = {};
+      const spentByCategory: Record<string, number> = {};
+      expenses.forEach(t => {
+        const cat = t.category || "Other";
+        const amt = Number(t.amount);
+        spentByCategory[cat] = (spentByCategory[cat] || 0) + amt;
+        const keys = txCategoryToBudgetKey[cat] || [];
+        if (keys.length > 0) {
+          const share = amt / keys.length;
+          keys.forEach(k => {
+            spentByBudgetKey[k] = (spentByBudgetKey[k] || 0) + share;
+          });
+        }
+      });
+
+      const categoryDetails = allocations.map(a => {
+        const spent = spentByBudgetKey[a.category] || 0;
+        const limit = Number(a.budgetLimit);
+        return {
+          id: a.id,
+          category: a.category,
+          budgetLimit: limit,
+          spent,
+          remaining: limit - spent,
+          overBudget: spent > limit,
+          note: a.note,
+        };
+      });
+
+      const totalSpent = expenses.reduce((s, t) => s + Number(t.amount), 0);
+
+      res.json({
+        month,
+        monthlyIncome,
+        totalAllocated,
+        totalSpent,
+        remaining: monthlyIncome - totalAllocated,
+        overIncome: totalAllocated > monthlyIncome && monthlyIncome > 0,
+        categories: categoryDetails,
+        spentByCategory: spentByBudgetKey,
+        depositsByGoal,
+      });
+    } catch (error) {
+      console.error("Error fetching budget summary:", error);
+      res.status(500).json({ message: "Failed to fetch budget summary" });
+    }
+  });
+
+  // ===== BUDGET PLAN =====
+  app.get("/api/budget-plan", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const month = (req.query.month as string) || format(new Date(), "yyyy-MM");
+      const plan = await storage.getBudgetPlan(userId, month);
+      res.json(plan || null);
+    } catch (error) {
+      console.error("Error fetching budget plan:", error);
+      res.status(500).json({ message: "Failed to fetch budget plan" });
+    }
+  });
+
+  app.post("/api/budget-plan", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const { month, income, strategy, needsAmount, wantsAmount, savingsAmount, investmentAmount } = req.body;
+      if (!month || income === undefined) return res.status(400).json({ message: "month and income required" });
+      const plan = await storage.upsertBudgetPlan({
+        userId,
+        month,
+        income: String(income),
+        strategy: strategy || "percentage",
+        needsAmount: String(needsAmount || 0),
+        wantsAmount: String(wantsAmount || 0),
+        savingsAmount: String(savingsAmount || 0),
+        investmentAmount: String(investmentAmount || 0),
+      });
+      await storage.updateProfile(userId, { monthlyIncome: String(income) });
+      res.json(plan);
+    } catch (error) {
+      console.error("Error saving budget plan:", error);
+      res.status(500).json({ message: "Failed to save budget plan" });
+    }
+  });
+
+  app.delete("/api/budget-plan", isAuthenticated, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const month = (req.query.month as string) || format(new Date(), "yyyy-MM");
+      await storage.deleteBudgetPlan(userId, month);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting budget plan:", error);
+      res.status(500).json({ message: "Failed to delete budget plan" });
+    }
+  });
+
   // ===== CUSTOM CATEGORIES =====
   app.get("/api/custom-categories", isAuthenticated, async (req, res) => {
     try {
@@ -1491,110 +1697,154 @@ app.post("/api/transactions", isAuthenticated, async (req, res) => {
     try {
       const userId = getUserId(req);
       const profile = await ensureProfile(userId);
-      const accts = await storage.getAccountsByUser(userId);
       const txs = await storage.getTransactionsByUser(userId);
-      const libs = await storage.getLiabilitiesByUser(userId);
-      const goalsList = await storage.getGoalsByUser(userId);
+      const goals = await storage.getGoalsByUser(userId);
 
       const totalTransactions = txs.length;
-      const warmingUp = totalTransactions < 3;
 
-      if (totalTransactions === 0) {
+      const TRANSACTIONS_NEEDED = 5;
+
+      if (totalTransactions < TRANSACTIONS_NEEDED) {
         res.json({
-          totalScore: 0,
+          totalScore: null,
           warmingUp: true,
-          title: "Financial Rookie",
-          tier: "Bronze",
-          breakdown: {
-            spending: 0,
-            wealth: 0,
-            debt: 0,
-            consistency: 0,
-          },
+          title: null,
+          tier: null,
+          transactionCount: totalTransactions,
+          transactionsNeeded: TRANSACTIONS_NEEDED,
+          breakdown: { needs: null, wants: null, savings: null, savingsMessage: null, consistency: null, consistencyMessage: null },
         });
         return;
       }
 
       const now = new Date();
-      const thirtyDaysAgo = format(subDays(now, 30), "yyyy-MM-dd");
-      const recentTxs = txs.filter(t => t.date >= thirtyDaysAgo);
+      const currentMonth = format(now, "yyyy-MM");
+      const monthStart = format(startOfMonth(now), "yyyy-MM-dd");
+      const monthEnd = format(endOfMonth(now), "yyyy-MM-dd");
 
-      const recentIncome = recentTxs.filter(t => t.type === "income").reduce((s, t) => s + Number(t.amount), 0);
-      const recentExpense = recentTxs.filter(t => t.type === "expense").reduce((s, t) => s + Number(t.amount), 0);
+      const budgetPlan = await storage.getBudgetPlan(userId, currentMonth);
+      const income = budgetPlan
+        ? Number(budgetPlan.income)
+        : Number(profile.monthlyIncome || 0);
 
-      let spendingScore = 0;
-      if (recentIncome === 0) {
-        spendingScore = 0;
-      } else {
-        const ratio = recentExpense / recentIncome;
-        spendingScore = Math.max(0, Math.round(25 - ratio * 25));
+      const monthTxs = txs.filter(t => t.date >= monthStart && t.date <= monthEnd);
+      const monthExpenses = monthTxs.filter(t => t.type === "expense");
+
+      const txCategoryToBudgetKey: Record<string, string[]> = {
+        "Food & Drinks": ["food", "snacks"],
+        "Transportation": ["transport"],
+        "Shopping": ["online_shopping", "lifestyle"],
+        "Entertainment": ["entertainment", "hangout", "hobby"],
+        "Bills & Utilities": ["electricity", "water"],
+        "Health": ["health"],
+        "Education": ["education"],
+        "Travel": ["transport"],
+        "Investment": ["investment"],
+        "Debt Payment": ["loan", "installment"],
+        "Insurance": ["insurance"],
+        "Tax": ["tax"],
+        "Savings": ["savings"],
+        "Other": [],
+        "Housing": ["housing"],
+        "Electricity": ["electricity"],
+        "Water": ["water"],
+        "Hangout": ["hangout"],
+        "Snacks": ["snacks"],
+        "Hobby": ["hobby"],
+        "Lifestyle": ["lifestyle"],
+        "Other Needs": [],
+      };
+
+      const needsKeys = new Set(["food", "snacks", "transport", "housing", "electricity", "water", "health", "education"]);
+      const wantsKeys = new Set(["online_shopping", "hangout", "entertainment", "hobby", "lifestyle"]);
+      const savingsKeys = new Set(["savings", "insurance", "installment", "investment", "loan", "tax"]);
+
+      let needsExpense = 0, wantsExpense = 0, savingsExpense = 0;
+      monthExpenses.forEach(t => {
+        const cat = t.category || "Other";
+        const amt = Number(t.amount);
+        const keys = txCategoryToBudgetKey[cat] || [];
+        if (keys.length === 0) return;
+        const share = amt / keys.length;
+        keys.forEach(k => {
+          if (needsKeys.has(k)) needsExpense += share;
+          else if (wantsKeys.has(k)) wantsExpense += share;
+          else if (savingsKeys.has(k)) savingsExpense += share;
+        });
+      });
+
+      let needsScore: number | null = null;
+      if (income > 0) {
+        const r = needsExpense / income;
+        if (r <= 0.50) needsScore = 30;
+        else if (r <= 0.60) needsScore = 25;
+        else if (r <= 0.70) needsScore = 20;
+        else if (r <= 0.80) needsScore = 10;
+        else needsScore = 5;
       }
-      spendingScore = Math.min(Math.max(spendingScore, 0), 25);
 
-      let wealthScore = 0;
-      const totalAssets = accts.reduce((s, a) => s + Number(a.balance), 0);
-      const totalIncome = txs.filter(t => t.type === "income").reduce((s, t) => s + Number(t.amount), 0);
-      const totalSavings = totalAssets;
-      if (totalIncome === 0) {
-        wealthScore = 0;
-      } else {
-        const savingRate = totalSavings / totalIncome;
-        wealthScore = Math.min(25, Math.round(savingRate * 80));
-      }
-      wealthScore = Math.min(Math.max(wealthScore, 0), 25);
-
-      let debtScore = 0;
-      const totalLiabilities = libs.reduce((s, l) => s + Number(l.amount), 0);
-      const monthlyIncome = Number(profile.monthlyIncome || 0);
-      const totalMonthlyDebt = libs.reduce((s, l) => s + Number(l.monthlyPayment || 0), 0);
-
-      if (totalLiabilities === 0 && libs.length === 0) {
-        debtScore = 20;
-      } else if (monthlyIncome > 0) {
-        const dsr = totalMonthlyDebt / monthlyIncome;
-        if (dsr <= 0.2) debtScore = 20;
-        else if (dsr <= 0.3) debtScore = 15;
-        else if (dsr <= 0.4) debtScore = 10;
-        else if (dsr <= 0.5) debtScore = 5;
-        else debtScore = 0;
-      } else {
-        debtScore = totalLiabilities > 0 ? 0 : 20;
+      let wantsScore: number | null = null;
+      if (income > 0) {
+        const r = wantsExpense / income;
+        if (r <= 0.20) wantsScore = 25;
+        else if (r <= 0.30) wantsScore = 20;
+        else if (r <= 0.40) wantsScore = 15;
+        else if (r <= 0.50) wantsScore = 8;
+        else wantsScore = 3;
       }
 
-      let consistencyScore = 0;
-      const streak = profile.streakCount;
-      if (streak >= 30) consistencyScore = 15;
-      else if (streak >= 14) consistencyScore = 12;
-      else if (streak >= 7) consistencyScore = 10;
-      else if (streak >= 3) consistencyScore = 7;
-      else if (streak >= 1) consistencyScore = 4;
-      else consistencyScore = 0;
-      consistencyScore = Math.min(consistencyScore, 15);
+      const hasGoals = goals.length > 0;
+      let savingsScore: number | null = null;
+      let savingsMessage: string | null = null;
+      if (!hasGoals) {
+        savingsMessage = "Buat target tabungan untuk mengaktifkan skor tabungan";
+      } else if (income > 0) {
+        const r = savingsExpense / income;
+        if (r >= 0.30) savingsScore = 25;
+        else if (r >= 0.20) savingsScore = 20;
+        else if (r >= 0.10) savingsScore = 15;
+        else if (r >= 0.05) savingsScore = 10;
+        else savingsScore = 5;
+      }
 
-      const totalScore = Math.min(Math.max(Math.round(spendingScore + wealthScore + debtScore + consistencyScore), 0), 100);
+      const daysInMonth = endOfMonth(now).getDate();
+      const activeDates = new Set(monthTxs.map(t => t.date));
+      const activeDays = activeDates.size;
+      const consistencyScore: number = activeDays >= 3
+        ? Math.min(20, Math.round((activeDays / daysInMonth) * 20))
+        : 0;
+      const consistencyMessage: string | null = activeDays < 3
+        ? "Catat transaksi beberapa hari lagi untuk menghitung konsistensi"
+        : null;
 
-      let title = "Financial Rookie";
-      if (totalScore >= 90) title = "Financial Architect";
-      else if (totalScore >= 75) title = "Strategic Planner";
-      else if (totalScore >= 60) title = "Wealth Builder";
-      else if (totalScore >= 40) title = "Stability Seeker";
+      const components = [needsScore, wantsScore, savingsScore, consistencyScore].filter(v => v !== null) as number[];
+      const totalScore = components.length > 0
+        ? Math.min(100, Math.max(0, components.reduce((a, b) => a + b, 0)))
+        : null;
 
-      let tier = "Bronze";
-      if (totalScore >= 95) tier = "Diamond";
-      else if (totalScore >= 80) tier = "Platinum";
-      else if (totalScore >= 60) tier = "Gold";
-      else if (totalScore >= 40) tier = "Silver";
+      let tierTitle: string | null = null;
+      if (totalScore !== null) {
+        if (totalScore >= 85) tierTitle = "Platinum";
+        else if (totalScore >= 70) tierTitle = "Gold";
+        else if (totalScore >= 50) tierTitle = "Silver";
+        else if (totalScore >= 30) tierTitle = "Bronze";
+        else tierTitle = "Financial Rookie";
+      }
 
       res.json({
         totalScore,
-        warmingUp,
-        title,
-        tier,
+        warmingUp: false,
+        title: tierTitle,
+        tier: tierTitle,
+        transactionCount: totalTransactions,
+        transactionsNeeded: TRANSACTIONS_NEEDED,
         breakdown: {
-          spending: spendingScore,
-          wealth: wealthScore,
-          debt: debtScore,
+          needs: needsScore,
+          wants: wantsScore,
+          savings: savingsScore,
+          savingsMessage,
           consistency: consistencyScore,
+          consistencyMessage,
         },
       });
     } catch (error) {

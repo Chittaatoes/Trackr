@@ -25,8 +25,10 @@ import {
   type DailyFocus, type InsertDailyFocus,
   type BadgeRecord, type InsertBadge,
   type UserBadgeRecord, type InsertUserBadge,
+  type BudgetAllocation, type InsertBudgetAllocation,
+  type BudgetPlan, type InsertBudgetPlan,
   accounts, transactions, goals, liabilities, userProfiles, xpLogs, streakLogs,
-  customCategories, dailyFocus, badges, userBadges,
+  customCategories, dailyFocus, badges, userBadges, budgetAllocations, budgetPlans,
 } from "../../shared/schema";
 import { users } from "../../shared/models/auth";
 import { db } from "./db";
@@ -95,6 +97,14 @@ export interface IStorage {
   awardBadge(userId: string, badgeId: number): Promise<UserBadgeRecord>;
   hasUserBadge(userId: string, badgeId: number): Promise<boolean>;
   seedBadges(badgeList: InsertBadge[]): Promise<void>;
+
+  getBudgetAllocationsByMonth(userId: string, month: string): Promise<BudgetAllocation[]>;
+  upsertBudgetAllocation(data: InsertBudgetAllocation): Promise<BudgetAllocation>;
+  deleteBudgetAllocation(id: number, userId: string): Promise<void>;
+
+  getBudgetPlan(userId: string, month: string): Promise<BudgetPlan | undefined>;
+  upsertBudgetPlan(data: InsertBudgetPlan): Promise<BudgetPlan>;
+  deleteBudgetPlan(userId: string, month: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -448,6 +458,72 @@ export class DatabaseStorage implements IStorage {
     if (existing.length === 0) {
       await db.insert(badges).values(badgeList);
     }
+  }
+
+  async getBudgetAllocationsByMonth(userId: string, month: string): Promise<BudgetAllocation[]> {
+    return db.select().from(budgetAllocations).where(
+      and(eq(budgetAllocations.userId, userId), eq(budgetAllocations.month, month))
+    ).orderBy(desc(budgetAllocations.createdAt));
+  }
+
+  async upsertBudgetAllocation(data: InsertBudgetAllocation): Promise<BudgetAllocation> {
+    const existing = await db.select().from(budgetAllocations).where(
+      and(
+        eq(budgetAllocations.userId, data.userId),
+        eq(budgetAllocations.category, data.category),
+        eq(budgetAllocations.month, data.month)
+      )
+    );
+    if (existing.length > 0) {
+      const [updated] = await db.update(budgetAllocations)
+        .set({ budgetLimit: data.budgetLimit, note: data.note })
+        .where(eq(budgetAllocations.id, existing[0].id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(budgetAllocations).values(data).returning();
+    return created;
+  }
+
+  async deleteBudgetAllocation(id: number, userId: string): Promise<void> {
+    await db.delete(budgetAllocations).where(
+      and(eq(budgetAllocations.id, id), eq(budgetAllocations.userId, userId))
+    );
+  }
+
+  async getBudgetPlan(userId: string, month: string): Promise<BudgetPlan | undefined> {
+    const [plan] = await db.select().from(budgetPlans).where(
+      and(eq(budgetPlans.userId, userId), eq(budgetPlans.month, month))
+    );
+    return plan;
+  }
+
+  async upsertBudgetPlan(data: InsertBudgetPlan): Promise<BudgetPlan> {
+    const existing = await db.select().from(budgetPlans).where(
+      and(eq(budgetPlans.userId, data.userId), eq(budgetPlans.month, data.month))
+    );
+    if (existing.length > 0) {
+      const [updated] = await db.update(budgetPlans)
+        .set({
+          income: data.income,
+          strategy: data.strategy,
+          needsAmount: data.needsAmount,
+          wantsAmount: data.wantsAmount,
+          savingsAmount: data.savingsAmount,
+          investmentAmount: data.investmentAmount,
+        })
+        .where(eq(budgetPlans.id, existing[0].id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(budgetPlans).values(data).returning();
+    return created;
+  }
+
+  async deleteBudgetPlan(userId: string, month: string): Promise<void> {
+    await db.delete(budgetPlans).where(
+      and(eq(budgetPlans.userId, userId), eq(budgetPlans.month, month))
+    );
   }
 }
 

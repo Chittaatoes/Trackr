@@ -280,3 +280,34 @@ export type BadgeRecord = typeof badges.$inferSelect;
 export type InsertBadge = z.infer<typeof insertBadgeSchema>;
 export type UserBadgeRecord = typeof userBadges.$inferSelect;
 export type InsertUserBadge = z.infer<typeof insertUserBadgeSchema>;
+
+export const budgetAllocations = pgTable("budget_allocations", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  category: text("category").notNull(),
+  budgetLimit: numeric("budget_limit", { precision: 15, scale: 2 }).notNull().default("0"),
+  month: text("month").notNull(),
+  note: text("note"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertBudgetAllocationSchema = createInsertSchema(budgetAllocations).omit({ id: true, createdAt: true });
+export type BudgetAllocation = typeof budgetAllocations.$inferSelect;
+export type InsertBudgetAllocation = z.infer<typeof insertBudgetAllocationSchema>;
+
+export const budgetPlans = pgTable("budget_plans", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  month: text("month").notNull(),
+  income: numeric("income", { precision: 15, scale: 2 }).notNull().default("0"),
+  strategy: text("strategy").notNull().default("percentage"),
+  needsAmount: numeric("needs_amount", { precision: 15, scale: 2 }).notNull().default("0"),
+  wantsAmount: numeric("wants_amount", { precision: 15, scale: 2 }).notNull().default("0"),
+  savingsAmount: numeric("savings_amount", { precision: 15, scale: 2 }).notNull().default("0"),
+  investmentAmount: numeric("investment_amount", { precision: 15, scale: 2 }).notNull().default("0"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertBudgetPlanSchema = createInsertSchema(budgetPlans).omit({ id: true, createdAt: true });
+export type BudgetPlan = typeof budgetPlans.$inferSelect;
+export type InsertBudgetPlan = z.infer<typeof insertBudgetPlanSchema>;

@@ -15,14 +15,14 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  Plus, ArrowDownLeft, ArrowUpRight, ArrowLeftRight, X, Trash2, Calendar, PiggyBank,
+  Plus, ArrowDownLeft, ArrowUpRight, ArrowLeftRight, X, Trash2, Calendar, PiggyBank, CreditCard,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatCurrency, EXPENSE_CATEGORIES, INCOME_CATEGORIES } from "@/lib/constants";
+import { formatCurrency, EXPENSE_CATEGORY_GROUPS, INCOME_CATEGORIES } from "@/lib/constants";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { isUnauthorizedError } from "@/lib/auth-utils";
-import type { Account, Transaction, CustomCategory } from "@shared/schema";
+import type { Account, Transaction, CustomCategory, Goal, Liability } from "@shared/schema";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -44,11 +44,21 @@ const transactionFormSchema = z.object({
   note: z.string().optional(),
 });
 
+type TxTabType = "expense" | "income" | "transfer" | "savings" | "debt_payment";
+
 const typeConfig = {
   income: { icon: ArrowDownLeft, color: "text-green-600 dark:text-green-400", bg: "bg-green-500/10", label: "Income" },
   expense: { icon: ArrowUpRight, color: "text-red-500 dark:text-red-400", bg: "bg-red-500/10", label: "Expense" },
   transfer: { icon: ArrowLeftRight, color: "text-blue-500 dark:text-blue-400", bg: "bg-blue-500/10", label: "Transfer" },
 };
+
+const TX_TAB_CONFIG: { type: TxTabType; icon: typeof ArrowUpRight; color: string; activeBg: string; iconBg: string; labelKey: string }[] = [
+  { type: "expense", icon: ArrowUpRight, color: "text-red-500 dark:text-red-400", activeBg: "bg-red-500/15", iconBg: "bg-red-500/10", labelKey: "actionExpense" },
+  { type: "income", icon: ArrowDownLeft, color: "text-green-600 dark:text-green-400", activeBg: "bg-green-500/15", iconBg: "bg-green-500/10", labelKey: "actionIncome" },
+  { type: "transfer", icon: ArrowLeftRight, color: "text-blue-500 dark:text-blue-400", activeBg: "bg-blue-500/15", iconBg: "bg-blue-500/10", labelKey: "actionTransfer" },
+  { type: "savings", icon: PiggyBank, color: "text-teal-600 dark:text-teal-400", activeBg: "bg-teal-500/15", iconBg: "bg-teal-500/10", labelKey: "actionSavings" },
+  { type: "debt_payment", icon: CreditCard, color: "text-orange-600 dark:text-orange-400", activeBg: "bg-orange-500/15", iconBg: "bg-orange-500/10", labelKey: "actionDebtPayment" },
+];
 
 function AddCategoryDialog({ categoryType, onClose }: { categoryType: string; onClose: () => void }) {
   const { toast } = useToast();
@@ -98,16 +108,25 @@ function TransactionForm({ accounts, onClose }: { accounts: Account[]; onClose: 
   const { toast } = useToast();
   const { t } = useLanguage();
   const [addCategoryOpen, setAddCategoryOpen] = useState(false);
+  const [tabType, setTabType] = useState<TxTabType>("expense");
 
-  const { data: customCategories } = useQuery<CustomCategory[]>({
-    queryKey: ["/api/custom-categories"],
-  });
+  const [savGoalId, setSavGoalId] = useState("");
+  const [savAmount, setSavAmount] = useState("");
+  const [savFromAcc, setSavFromAcc] = useState("");
+  const [debtLiabId, setDebtLiabId] = useState("");
+  const [debtAmount, setDebtAmount] = useState("");
+  const [debtFromAcc, setDebtFromAcc] = useState("");
+
+  const { data: customCategories } = useQuery<CustomCategory[]>({ queryKey: ["/api/custom-categories"] });
+  const { data: goals } = useQuery<Goal[]>({ queryKey: ["/api/goals"] });
+  const { data: liabilities } = useQuery<Liability[]>({ queryKey: ["/api/liabilities"] });
+
+  const activeGoals = goals?.filter(g => Number(g.currentAmount) < Number(g.targetAmount)) ?? [];
+  const activeDebts = liabilities?.filter(d => Number(d.amount) > 0 || (d.monthlyPayment && d.remainingMonths && d.remainingMonths > 0)) ?? [];
 
   const deleteCategoryMutation = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/custom-categories/${id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/custom-categories"] });
-    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/custom-categories"] }); },
   });
 
   const form = useForm({
@@ -124,24 +143,16 @@ function TransactionForm({ accounts, onClose }: { accounts: Account[]; onClose: 
   });
 
   const watchType = form.watch("type");
-  const defaultCategories = watchType === "income" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
   const userCategories = customCategories?.filter(c => c.type === watchType) || [];
 
-  const mutation = useMutation({
+  const txMutation = useMutation({
     mutationFn: (data: z.infer<typeof transactionFormSchema>) => {
       const payload: Record<string, unknown> = {
-        type: data.type,
-        amount: data.amount,
-        date: data.date,
-        category: data.category || null,
-        note: data.note || null,
+        type: data.type, amount: data.amount, date: data.date,
+        category: data.category || null, note: data.note || null,
       };
-      if (data.type === "expense" || data.type === "transfer") {
-        payload.fromAccountId = data.fromAccountId ? parseInt(data.fromAccountId) : null;
-      }
-      if (data.type === "income" || data.type === "transfer") {
-        payload.toAccountId = data.toAccountId ? parseInt(data.toAccountId) : null;
-      }
+      if (data.type === "expense" || data.type === "transfer") payload.fromAccountId = data.fromAccountId ? parseInt(data.fromAccountId) : null;
+      if (data.type === "income" || data.type === "transfer") payload.toAccountId = data.toAccountId ? parseInt(data.toAccountId) : null;
       return apiRequest("POST", "/api/transactions", payload);
     },
     onSuccess: () => {
@@ -150,31 +161,140 @@ function TransactionForm({ accounts, onClose }: { accounts: Account[]; onClose: 
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/finance-score"] });
       toast({ title: "Transaction recorded! +5 XP" });
       onClose();
     },
     onError: (error: Error) => {
-      if (isUnauthorizedError(error)) {
-        toast({ title: "Unauthorized", description: "Logging in again...", variant: "destructive" });
-        setTimeout(() => { window.location.href = "/api/login"; }, 500);
-        return;
-      }
+      if (isUnauthorizedError(error)) { toast({ title: "Unauthorized", variant: "destructive" }); return; }
       toast({ title: t.common.error, description: error.message, variant: "destructive" });
     },
   });
 
-  const typeLabels: Record<string, string> = {
-    income: t.transactions.income,
-    expense: t.transactions.expense,
-    transfer: t.transactions.transfer,
-  };
+  const savingsMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/goals/${savGoalId}/deposit`, {
+      amount: savAmount, fromAccountId: savFromAcc ? parseInt(savFromAcc) : null,
+    }),
+    onSuccess: () => {
+      playSound("transaction");
+      queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/finance-score"] });
+      toast({ title: "Savings deposited! +8 XP" });
+      setSavGoalId(""); setSavAmount(""); setSavFromAcc("");
+      onClose();
+    },
+    onError: (error: Error) => {
+      toast({ title: t.common.error, description: error.message, variant: "destructive" });
+    },
+  });
+
+  const debtMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/liabilities/${debtLiabId}/pay`, {
+      amount: debtAmount, fromAccountId: debtFromAcc ? parseInt(debtFromAcc) : null,
+    }),
+    onSuccess: () => {
+      playSound("transaction");
+      queryClient.invalidateQueries({ queryKey: ["/api/liabilities"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/finance-score"] });
+      toast({ title: "Debt payment recorded! +8 XP" });
+      setDebtLiabId(""); setDebtAmount(""); setDebtFromAcc("");
+      onClose();
+    },
+    onError: (error: Error) => {
+      toast({ title: t.common.error, description: error.message, variant: "destructive" });
+    },
+  });
 
   const watchFromId = form.watch("fromAccountId");
   const watchAmt = form.watch("amount");
   const selectedFromAcc = accounts.find(a => String(a.id) === watchFromId);
-  const hasInsufficientBalance = selectedFromAcc && watchAmt &&
+  const hasTxInsufficientBalance = selectedFromAcc && watchAmt &&
     (watchType === "expense" || watchType === "transfer") &&
     Number(watchAmt) > Number(selectedFromAcc.balance);
+
+  const savFromAccObj = accounts.find(a => String(a.id) === savFromAcc);
+  const hasSavBadBalance = savFromAccObj && savAmount && Number(savAmount) > Number(savFromAccObj.balance);
+  const debtFromAccObj = accounts.find(a => String(a.id) === debtFromAcc);
+  const hasDebtBadBalance = debtFromAccObj && debtAmount && Number(debtAmount) > Number(debtFromAccObj.balance);
+
+  const selectedGoal = activeGoals.find(g => String(g.id) === savGoalId);
+  const selectedDebt = activeDebts.find(d => String(d.id) === debtLiabId);
+
+  const handleTabChange = (tab: TxTabType) => {
+    setTabType(tab);
+    if (tab === "income" || tab === "expense" || tab === "transfer") {
+      form.setValue("type", tab);
+    }
+  };
+
+  const isTxTab = tabType === "income" || tabType === "expense" || tabType === "transfer";
+
+  const renderTypeTabs = () => {
+    const row1 = TX_TAB_CONFIG.slice(0, 3);
+    const row2 = TX_TAB_CONFIG.slice(3);
+    const renderBtn = (cfg: typeof TX_TAB_CONFIG[0]) => {
+      const Icon = cfg.icon;
+      const active = tabType === cfg.type;
+      return (
+        <button
+          key={cfg.type}
+          type="button"
+          onClick={() => handleTabChange(cfg.type)}
+          className={cn(
+            "flex-1 flex flex-col items-center gap-1 py-2.5 rounded-xl transition-all duration-150 select-none",
+            active ? cfg.activeBg : "hover:bg-muted/50"
+          )}
+          data-testid={`button-type-${cfg.type}`}
+        >
+          <div className={cn("rounded-lg p-1.5 transition-colors", active ? cfg.iconBg : "bg-muted/30")}>
+            <Icon className={cn("w-4 h-4 transition-colors", active ? cfg.color : "text-muted-foreground")} />
+          </div>
+          <span className={cn("text-[10px] font-medium leading-none transition-colors", active ? cfg.color : "text-muted-foreground")}>
+            {(t.dashboard as any)[cfg.labelKey]}
+          </span>
+        </button>
+      );
+    };
+    return (
+      <div className="space-y-1.5">
+        <div className="flex gap-1.5">{row1.map(renderBtn)}</div>
+        <div className="flex gap-1.5 justify-center">
+          {row2.map(cfg => {
+            const Icon = cfg.icon;
+            const active = tabType === cfg.type;
+            return (
+              <button
+                key={cfg.type}
+                type="button"
+                onClick={() => handleTabChange(cfg.type)}
+                style={{ width: "calc((100% - 8px) / 3)" }}
+                className={cn(
+                  "flex flex-col items-center gap-1 py-2.5 rounded-xl transition-all duration-150 select-none",
+                  active ? cfg.activeBg : "hover:bg-muted/50"
+                )}
+                data-testid={`button-type-${cfg.type}`}
+              >
+                <div className={cn("rounded-lg p-1.5 transition-colors", active ? cfg.iconBg : "bg-muted/30")}>
+                  <Icon className={cn("w-4 h-4 transition-colors", active ? cfg.color : "text-muted-foreground")} />
+                </div>
+                <span className={cn("text-[10px] font-medium leading-none transition-colors", active ? cfg.color : "text-muted-foreground")}>
+                  {(t.dashboard as any)[cfg.labelKey]}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   if (accounts.length === 0) {
     return (
@@ -188,47 +308,18 @@ function TransactionForm({ accounts, onClose }: { accounts: Account[]; onClose: 
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit((data) => {
-        if (hasInsufficientBalance) {
+        if (!isTxTab) return;
+        if (hasTxInsufficientBalance) {
           toast({ title: t.common.error, description: t.transactions.insufficientBalanceTx, variant: "destructive" });
           return;
         }
-        mutation.mutate(data);
+        txMutation.mutate(data);
       })} className="flex flex-col max-md:flex-1 max-md:min-h-0">
         <div className="space-y-5 px-6 max-md:px-6 md:px-0 max-md:flex-1 max-md:overflow-y-auto max-md:pb-4">
-          <FormField
-            control={form.control}
-            name="type"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t.transactions.type}</FormLabel>
-                <div className="flex rounded-md border border-border p-1 gap-1 bg-muted/40" role="group" aria-label={t.transactions.type}>
-                  {(["income", "expense", "transfer"] as const).map((tp) => {
-                    const cfg = typeConfig[tp];
-                    return (
-                      <button
-                        key={tp}
-                        type="button"
-                        role="radio"
-                        aria-checked={field.value === tp}
-                        className={cn(
-                          "flex-1 flex items-center justify-center gap-1.5 rounded-sm py-2.5 text-sm font-medium transition-all duration-150",
-                          field.value === tp
-                            ? "bg-background shadow-sm text-foreground"
-                            : "text-muted-foreground"
-                        )}
-                        onClick={() => field.onChange(tp)}
-                        data-testid={`button-type-${tp}`}
-                      >
-                        <cfg.icon className="w-4 h-4" />
-                        {typeLabels[tp]}
-                      </button>
-                    );
-                  })}
-                </div>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+
+          {renderTypeTabs()}
+
+          {isTxTab && (<>
           <FormField
             control={form.control}
             name="amount"
@@ -292,10 +383,8 @@ function TransactionForm({ accounts, onClose }: { accounts: Account[]; onClose: 
                         ))}
                       </SelectContent>
                     </Select>
-                    {hasInsufficientBalance && (
-                      <p className="text-xs text-destructive mt-1" data-testid="text-tx-insufficient">
-                        Saldo tidak mencukupi
-                      </p>
+                    {hasTxInsufficientBalance && (
+                      <p className="text-xs text-destructive mt-1" data-testid="text-tx-insufficient">Saldo tidak mencukupi</p>
                     )}
                     <FormMessage />
                   </FormItem>
@@ -367,13 +456,29 @@ function TransactionForm({ accounts, onClose }: { accounts: Account[]; onClose: 
                         <SelectValue placeholder={t.transactions.selectCategory} />
                       </SelectTrigger>
                     </FormControl>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectLabel>{t.transactions.defaultCategories}</SelectLabel>
-                        {defaultCategories.map((c) => (
-                          <SelectItem key={c} value={c}>{(t.categories as Record<string, string>)[c] || c}</SelectItem>
-                        ))}
-                      </SelectGroup>
+                    <SelectContent className="max-h-72">
+                      {watchType === "income" ? (
+                        <SelectGroup>
+                          <SelectLabel>{t.transactions.defaultCategories}</SelectLabel>
+                          {INCOME_CATEGORIES.map((c) => (
+                            <SelectItem key={c} value={c}>{(t.categories as Record<string, string>)[c] || c}</SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ) : (
+                        EXPENSE_CATEGORY_GROUPS.map((group) => (
+                          <SelectGroup key={group.groupKey}>
+                            <SelectLabel className="text-xs font-semibold uppercase tracking-widest">
+                              {group.groupKey === "needs" ? t.transactions.needsGroup : t.transactions.wantsGroup}
+                            </SelectLabel>
+                            {group.items.map((item) => (
+                              <SelectItem key={item.value} value={item.value}>
+                                <span className="mr-2">{item.emoji}</span>
+                                {(t.categories as Record<string, string>)[item.value] || item.value}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        ))
+                      )}
                       {userCategories.length > 0 && (
                         <>
                           <SelectSeparator />
@@ -381,9 +486,7 @@ function TransactionForm({ accounts, onClose }: { accounts: Account[]; onClose: 
                             <SelectLabel>{t.transactions.customCategories}</SelectLabel>
                             {userCategories.map((c) => (
                               <SelectItem key={`custom-${c.id}`} value={c.name}>
-                                <div className="flex items-center justify-between w-full gap-2">
-                                  <span>{c.name}</span>
-                                </div>
+                                <span>{c.name}</span>
                               </SelectItem>
                             ))}
                           </SelectGroup>
@@ -427,17 +530,161 @@ function TransactionForm({ accounts, onClose }: { accounts: Account[]; onClose: 
               </FormItem>
             )}
           />
+          </>)}
+
+          {tabType === "savings" && (<>
+            {activeGoals.length === 0 ? (
+              <div className="py-6 text-center">
+                <PiggyBank className="w-10 h-10 mx-auto text-muted-foreground/40 mb-2" />
+                <p className="text-sm text-muted-foreground">{t.dashboard.noGoals}</p>
+              </div>
+            ) : (<>
+              <FormItem>
+                <FormLabel>{t.dashboard.selectGoal}</FormLabel>
+                <Select onValueChange={setSavGoalId} value={savGoalId}>
+                  <SelectTrigger className="min-h-[48px]" data-testid="select-sav-goal">
+                    <SelectValue placeholder={t.dashboard.selectGoal} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {activeGoals.map((g) => (
+                      <SelectItem key={g.id} value={String(g.id)}>
+                        {g.name} ({formatCurrency(Number(g.currentAmount))} / {formatCurrency(Number(g.targetAmount))})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FormItem>
+              {selectedGoal && (
+                <div className="rounded-md bg-muted/50 p-3">
+                  <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground mb-1.5">
+                    <span>{selectedGoal.name}</span>
+                    <span className="font-mono">{Math.round(Number(selectedGoal.currentAmount) / Number(selectedGoal.targetAmount) * 100)}%</span>
+                  </div>
+                  <div className="w-full h-1.5 rounded-full bg-muted overflow-hidden">
+                    <div className="h-full rounded-full bg-primary/60" style={{ width: `${Math.min(Number(selectedGoal.currentAmount) / Number(selectedGoal.targetAmount) * 100, 100)}%` }} />
+                  </div>
+                </div>
+              )}
+              <FormItem>
+                <FormLabel>{t.transactions.amount}</FormLabel>
+                <CurrencyInput placeholder="0" className="min-h-[48px] text-lg" value={savAmount} onChange={setSavAmount} data-testid="input-sav-amount" />
+              </FormItem>
+              <FormItem>
+                <FormLabel>{t.transactions.fromAccount}</FormLabel>
+                <Select onValueChange={setSavFromAcc} value={savFromAcc}>
+                  <SelectTrigger className="min-h-[48px]" data-testid="select-sav-from">
+                    <SelectValue placeholder={t.transactions.selectAccount}>
+                      {savFromAcc && (() => { const a = accounts.find(ac => String(ac.id) === savFromAcc); return a ? <span>{a.name} <span className="text-muted-foreground/70">({formatCurrency(Number(a.balance))})</span></span> : null; })()}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {accounts.map((a) => (
+                      <SelectItem key={a.id} value={String(a.id)}>{a.name} ({formatCurrency(Number(a.balance))})</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {hasSavBadBalance && <p className="text-xs text-destructive mt-1">Saldo tidak mencukupi</p>}
+              </FormItem>
+            </>)}
+          </>)}
+
+          {tabType === "debt_payment" && (<>
+            {activeDebts.length === 0 ? (
+              <div className="py-6 text-center">
+                <CreditCard className="w-10 h-10 mx-auto text-muted-foreground/40 mb-2" />
+                <p className="text-sm text-muted-foreground">{t.dashboard.noDebts}</p>
+              </div>
+            ) : (<>
+              <FormItem>
+                <FormLabel>{t.dashboard.selectDebt}</FormLabel>
+                <Select onValueChange={setDebtLiabId} value={debtLiabId}>
+                  <SelectTrigger className="min-h-[48px]" data-testid="select-debt-liab">
+                    <SelectValue placeholder={t.dashboard.selectDebt} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {activeDebts.map((d) => {
+                      const displayAmt = Number(d.amount) > 0 ? Number(d.amount) : (d.monthlyPayment && d.remainingMonths ? Number(d.monthlyPayment) * d.remainingMonths : 0);
+                      return (
+                        <SelectItem key={d.id} value={String(d.id)}>
+                          {d.name} ({t.dashboard.remainingDebt}: {formatCurrency(displayAmt)})
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              </FormItem>
+              {selectedDebt && (
+                <div className="rounded-md bg-muted/50 p-3">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="text-muted-foreground">{selectedDebt.name}</span>
+                    <span className="font-mono font-semibold text-orange-600 dark:text-orange-400">{formatCurrency(Number(selectedDebt.amount))}</span>
+                  </div>
+                  {selectedDebt.monthlyPayment && (
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      {formatCurrency(Number(selectedDebt.monthlyPayment))}/mo
+                      {selectedDebt.remainingMonths ? ` · ${selectedDebt.remainingMonths} mo left` : ""}
+                    </p>
+                  )}
+                </div>
+              )}
+              <FormItem>
+                <FormLabel>{t.transactions.amount}</FormLabel>
+                <CurrencyInput placeholder="0" className="min-h-[48px] text-lg" value={debtAmount} onChange={setDebtAmount} data-testid="input-debt-amount" />
+              </FormItem>
+              <FormItem>
+                <FormLabel>{t.transactions.fromAccount}</FormLabel>
+                <Select onValueChange={setDebtFromAcc} value={debtFromAcc}>
+                  <SelectTrigger className="min-h-[48px]" data-testid="select-debt-from">
+                    <SelectValue placeholder={t.transactions.selectAccount}>
+                      {debtFromAcc && (() => { const a = accounts.find(ac => String(ac.id) === debtFromAcc); return a ? <span>{a.name} <span className="text-muted-foreground/70">({formatCurrency(Number(a.balance))})</span></span> : null; })()}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {accounts.map((a) => (
+                      <SelectItem key={a.id} value={String(a.id)}>{a.name} ({formatCurrency(Number(a.balance))})</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {hasDebtBadBalance && <p className="text-xs text-destructive mt-1">Saldo tidak mencukupi</p>}
+              </FormItem>
+            </>)}
+          </>)}
+
         </div>
 
         <div className="shrink-0 px-6 max-md:px-6 md:px-0 pt-4 pb-6 md:pb-0 max-md:border-t max-md:border-border flex flex-col gap-2 md:flex-row md:justify-end">
-          <Button
-            type="submit"
-            disabled={mutation.isPending || !!hasInsufficientBalance}
-            className="w-full md:w-auto min-h-[52px] max-md:min-h-[52px] md:min-h-[36px] text-base md:text-sm rounded-md md:order-2"
-            data-testid="button-save-tx"
-          >
-            {mutation.isPending ? "..." : t.transactions.submit}
-          </Button>
+          {isTxTab && (
+            <Button
+              type="submit"
+              disabled={txMutation.isPending || !!hasTxInsufficientBalance}
+              className="w-full md:w-auto min-h-[52px] max-md:min-h-[52px] md:min-h-[36px] text-base md:text-sm rounded-md md:order-2"
+              data-testid="button-save-tx"
+            >
+              {txMutation.isPending ? "..." : t.transactions.submit}
+            </Button>
+          )}
+          {tabType === "savings" && (
+            <Button
+              type="button"
+              disabled={savingsMutation.isPending || !savGoalId || !savAmount || !savFromAcc || !!hasSavBadBalance}
+              onClick={() => savingsMutation.mutate()}
+              className="w-full md:w-auto min-h-[52px] max-md:min-h-[52px] md:min-h-[36px] text-base md:text-sm rounded-md md:order-2"
+              data-testid="button-save-savings"
+            >
+              {savingsMutation.isPending ? "..." : t.dashboard.depositToGoal}
+            </Button>
+          )}
+          {tabType === "debt_payment" && (
+            <Button
+              type="button"
+              disabled={debtMutation.isPending || !debtLiabId || !debtAmount || !debtFromAcc || !!hasDebtBadBalance}
+              onClick={() => debtMutation.mutate()}
+              className="w-full md:w-auto min-h-[52px] max-md:min-h-[52px] md:min-h-[36px] text-base md:text-sm rounded-md md:order-2"
+              data-testid="button-save-debt"
+            >
+              {debtMutation.isPending ? "..." : t.dashboard.payDebt}
+            </Button>
+          )}
           <Button
             type="button"
             variant="ghost"
@@ -519,9 +766,13 @@ function SpendingChart({ transactions, t }: { transactions: { date: string; labe
 export default function Transactions() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
   const [dateFilter, setDateFilter] = useState<DateFilter>("last7");
+  const [pendingFilter, setPendingFilter] = useState<DateFilter>("last7");
   const [customStart, setCustomStart] = useState(() => format(subDays(new Date(), 30), "yyyy-MM-dd"));
   const [customEnd, setCustomEnd] = useState(() => format(new Date(), "yyyy-MM-dd"));
+  const [pendingStart, setPendingStart] = useState(() => format(subDays(new Date(), 30), "yyyy-MM-dd"));
+  const [pendingEnd, setPendingEnd] = useState(() => format(new Date(), "yyyy-MM-dd"));
   const { toast } = useToast();
   const { t, language } = useLanguage();
 
@@ -540,6 +791,7 @@ export default function Transactions() {
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/finance-score"] });
       queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string)?.startsWith("/api/spending-insight") });
       toast({ title: t.transactions.deleted });
     },
@@ -568,8 +820,33 @@ export default function Transactions() {
 
   const filteredTransactions = useMemo(() => {
     if (!transactions) return [];
-    return transactions.filter((tx) => tx.date >= dateRange.start && tx.date <= dateRange.end);
+    return transactions
+      .filter((tx) => tx.date >= dateRange.start && tx.date <= dateRange.end)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [transactions, dateRange]);
+
+  const groupedTransactions = useMemo(() => {
+    const todayStr = format(new Date(), "yyyy-MM-dd");
+    const yesterdayStr = format(subDays(new Date(), 1), "yyyy-MM-dd");
+    const groups: { dateKey: string; label: string; totalExpense: number; transactions: Transaction[] }[] = [];
+    const seen: Record<string, number> = {};
+    for (const tx of filteredTransactions) {
+      if (seen[tx.date] === undefined) {
+        seen[tx.date] = groups.length;
+        let label = tx.date;
+        if (tx.date === todayStr) label = t.transactions.today.toUpperCase();
+        else if (tx.date === yesterdayStr) label = t.transactions.yesterday.toUpperCase();
+        else {
+          try { label = format(parseISO(tx.date), "d MMM yyyy"); } catch { label = tx.date; }
+        }
+        groups.push({ dateKey: tx.date, label, totalExpense: 0, transactions: [] });
+      }
+      const g = groups[seen[tx.date]];
+      if (tx.type === "expense") g.totalExpense += parseFloat(String(tx.amount));
+      g.transactions.push(tx);
+    }
+    return groups;
+  }, [filteredTransactions, t.transactions.today, t.transactions.yesterday]);
 
   const chartData = useMemo(() => {
     const days = eachDayOfInterval({
@@ -591,6 +868,28 @@ export default function Transactions() {
       };
     });
   }, [filteredTransactions, dateRange]);
+
+  const filterLabel = useMemo(() => {
+    if (dateFilter === "last7") return t.transactions.last7Days;
+    if (dateFilter === "thisMonth") return t.transactions.thisMonth;
+    return `${customStart} — ${customEnd}`;
+  }, [dateFilter, customStart, customEnd, t]);
+
+  const openFilterSheet = () => {
+    setPendingFilter(dateFilter);
+    setPendingStart(customStart);
+    setPendingEnd(customEnd);
+    setFilterSheetOpen(true);
+  };
+
+  const applyFilter = () => {
+    setDateFilter(pendingFilter);
+    if (pendingFilter === "custom") {
+      setCustomStart(pendingStart);
+      setCustomEnd(pendingEnd);
+    }
+    setFilterSheetOpen(false);
+  };
 
   if (isLoading) {
     return (
@@ -646,50 +945,79 @@ export default function Transactions() {
         </Dialog>
       </div>
 
-      <div className="flex flex-wrap items-end gap-3" data-testid="filter-date-range">
-        <div className="flex rounded-md border border-border p-1 gap-1 bg-muted/40">
-          {(["last7", "thisMonth", "custom"] as const).map((f) => {
-            const label = f === "last7" ? t.transactions.last7Days
-              : f === "thisMonth" ? t.transactions.thisMonth
-              : t.transactions.customRange;
-            return (
-              <button
-                key={f}
-                type="button"
-                className={cn(
-                  "px-3 py-1.5 rounded-sm text-sm font-medium transition-all duration-150",
-                  dateFilter === f
-                    ? "bg-background shadow-sm text-foreground"
-                    : "text-muted-foreground"
-                )}
-                onClick={() => setDateFilter(f)}
-                data-testid={`button-filter-${f}`}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-        {dateFilter === "custom" && (
-          <div className="flex items-center gap-2">
-            <Input
-              type="date"
-              value={customStart}
-              onChange={(e) => setCustomStart(e.target.value)}
-              className="w-[150px]"
-              data-testid="input-custom-start"
-            />
-            <span className="text-sm text-muted-foreground">—</span>
-            <Input
-              type="date"
-              value={customEnd}
-              onChange={(e) => setCustomEnd(e.target.value)}
-              className="w-[150px]"
-              data-testid="input-custom-end"
-            />
-          </div>
-        )}
+      <div className="flex items-center gap-2" data-testid="filter-date-range">
+        <button
+          type="button"
+          onClick={openFilterSheet}
+          className="flex items-center gap-2 px-3 py-2 rounded-md border border-border bg-muted/40 text-sm font-medium text-foreground hover:bg-muted/70 transition-colors"
+          data-testid="button-open-filter"
+        >
+          <Calendar className="w-4 h-4 text-muted-foreground" />
+          <span>{filterLabel}</span>
+          <svg className="w-3.5 h-3.5 text-muted-foreground ml-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
       </div>
+
+      <Dialog open={filterSheetOpen} onOpenChange={(v) => { if (!v) setFilterSheetOpen(false); }}>
+        <DialogContentBottomSheet>
+          <div className="px-6 pt-2 pb-6 flex flex-col gap-5">
+            <div className="flex rounded-lg border border-border p-1 gap-1 bg-muted/40">
+              {(["last7", "thisMonth", "custom"] as const).map((f) => {
+                const label = f === "last7" ? t.transactions.last7Days
+                  : f === "thisMonth" ? t.transactions.thisMonth
+                  : t.transactions.customRange;
+                return (
+                  <button
+                    key={f}
+                    type="button"
+                    className={cn(
+                      "flex-1 py-2 rounded-md text-sm font-medium transition-all duration-150",
+                      pendingFilter === f
+                        ? "bg-background shadow-sm text-foreground"
+                        : "text-muted-foreground"
+                    )}
+                    onClick={() => setPendingFilter(f)}
+                    data-testid={`button-filter-${f}`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {pendingFilter === "custom" && (
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t.transactions.startDate}</label>
+                  <Input
+                    type="date"
+                    value={pendingStart}
+                    onChange={(e) => setPendingStart(e.target.value)}
+                    className="min-h-[48px]"
+                    data-testid="input-custom-start"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t.transactions.endDate}</label>
+                  <Input
+                    type="date"
+                    value={pendingEnd}
+                    onChange={(e) => setPendingEnd(e.target.value)}
+                    className="min-h-[48px]"
+                    data-testid="input-custom-end"
+                  />
+                </div>
+              </div>
+            )}
+
+            <Button onClick={applyFilter} className="w-full min-h-[48px]">
+              {t.transactions.applyFilter}
+            </Button>
+          </div>
+        </DialogContentBottomSheet>
+      </Dialog>
 
       <Card data-testid="card-spending-chart">
         <CardContent className="p-5">
@@ -707,67 +1035,80 @@ export default function Transactions() {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-2">
-          {filteredTransactions.map((tx) => {
-            const isSavingsDeposit = tx.category === "Savings" && tx.note?.startsWith("Deposit to");
-            const cfg = typeConfig[tx.type as keyof typeof typeConfig];
-            const Icon = isSavingsDeposit ? PiggyBank : cfg.icon;
-            const iconColor = isSavingsDeposit ? "text-teal-600 dark:text-teal-400" : cfg.color;
-            const iconBg = isSavingsDeposit ? "bg-teal-500/10" : cfg.bg;
-            const goalName = isSavingsDeposit ? tx.note?.replace("Deposit to ", "") : null;
-            return (
-              <Card key={tx.id} className="hover-elevate transition-all duration-200" data-testid={`card-tx-${tx.id}`}>
-                <CardContent className="p-4 flex items-center gap-3">
-                  <div className={`w-9 h-9 rounded-md flex items-center justify-center shrink-0 ${iconBg}`}>
-                    <Icon className={`w-4 h-4 ${iconColor}`} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-medium">
-                        {isSavingsDeposit
-                          ? goalName
-                          : tx.type === "transfer"
-                            ? `${getAccountName(tx.fromAccountId)} → ${getAccountName(tx.toAccountId)}`
-                            : (tx.category ? ((t.categories as Record<string, string>)[tx.category] || tx.category) : typeLabels[tx.type] || cfg.label)}
-                      </span>
-                      <Badge variant="secondary" className="text-[10px]">
-                        {isSavingsDeposit ? (language === "en" ? "Goal" : "Nabung") : typeLabels[tx.type] || cfg.label}
-                      </Badge>
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                      <span className="text-xs text-muted-foreground">{tx.date}</span>
-                      {!isSavingsDeposit && tx.note && <span className="text-xs text-muted-foreground truncate max-w-[200px]">{tx.note}</span>}
-                      {isSavingsDeposit && <span className="text-xs text-muted-foreground">{getAccountName(tx.fromAccountId)}</span>}
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <span className={`font-mono font-semibold text-sm ${
-                      tx.type === "income" ? "text-green-600 dark:text-green-400" :
-                      tx.type === "expense" ? "text-red-500 dark:text-red-400" :
-                      isSavingsDeposit ? "text-emerald-600 dark:text-emerald-400" :
-                      "text-foreground"
-                    }`}>
-                      {tx.type === "income" ? "+" : tx.type === "expense" ? "-" : ""}
-                      {isSavingsDeposit ? formatCurrency(String(Math.abs(Number(tx.amount)))) : formatCurrency(tx.amount)}
-                    </span>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {tx.type === "income" ? getAccountName(tx.toAccountId) :
-                       tx.type === "expense" ? getAccountName(tx.fromAccountId) : ""}
-                    </p>
-                  </div>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    onClick={() => deleteTxMutation.mutate(tx.id)}
-                    disabled={deleteTxMutation.isPending}
-                    data-testid={`button-delete-tx-${tx.id}`}
-                  >
-                    <Trash2 className="w-4 h-4 text-muted-foreground" />
-                  </Button>
-                </CardContent>
-              </Card>
-            );
-          })}
+        <div className="space-y-4">
+          {groupedTransactions.map((group) => (
+            <div key={group.dateKey}>
+              <div className="flex items-center justify-between px-1 mb-2">
+                <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">{group.label}</span>
+                {group.totalExpense > 0 && (
+                  <span className="text-[11px] text-muted-foreground font-mono">- {formatCurrency(group.totalExpense)}</span>
+                )}
+              </div>
+              <div className="space-y-2">
+                {group.transactions.map((tx) => {
+                  const isSavingsDeposit = tx.category === "Savings" && tx.note?.startsWith("Deposit to");
+                  const cfg = typeConfig[tx.type as keyof typeof typeConfig];
+                  const Icon = isSavingsDeposit ? PiggyBank : cfg.icon;
+                  const iconColor = isSavingsDeposit ? "text-teal-600 dark:text-teal-400" : cfg.color;
+                  const iconBg = isSavingsDeposit ? "bg-teal-500/10" : cfg.bg;
+                  const goalName = isSavingsDeposit ? tx.note?.replace("Deposit to ", "") : null;
+                  const txTime = tx.createdAt ? format(new Date(tx.createdAt), "HH:mm") : "";
+                  return (
+                    <Card key={tx.id} className="hover-elevate transition-all duration-200" data-testid={`card-tx-${tx.id}`}>
+                      <CardContent className="p-4 flex items-center gap-3">
+                        <div className={`w-9 h-9 rounded-md flex items-center justify-center shrink-0 ${iconBg}`}>
+                          <Icon className={`w-4 h-4 ${iconColor}`} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-medium">
+                              {isSavingsDeposit
+                                ? goalName
+                                : tx.type === "transfer"
+                                  ? `${getAccountName(tx.fromAccountId)} → ${getAccountName(tx.toAccountId)}`
+                                  : (tx.category ? ((t.categories as Record<string, string>)[tx.category] || tx.category) : typeLabels[tx.type] || cfg.label)}
+                            </span>
+                            <Badge variant="secondary" className="text-[10px]">
+                              {isSavingsDeposit ? (language === "en" ? "Goal" : "Nabung") : typeLabels[tx.type] || cfg.label}
+                            </Badge>
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                            <span className="text-xs text-muted-foreground">{txTime}</span>
+                            {!isSavingsDeposit && tx.note && <span className="text-xs text-muted-foreground truncate max-w-[200px]">{tx.note}</span>}
+                            {isSavingsDeposit && <span className="text-xs text-muted-foreground">{getAccountName(tx.fromAccountId)}</span>}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className={`font-mono font-semibold text-sm ${
+                            tx.type === "income" ? "text-green-600 dark:text-green-400" :
+                            tx.type === "expense" ? "text-red-500 dark:text-red-400" :
+                            isSavingsDeposit ? "text-emerald-600 dark:text-emerald-400" :
+                            "text-foreground"
+                          }`}>
+                            {tx.type === "income" ? "+" : tx.type === "expense" ? "-" : ""}
+                            {isSavingsDeposit ? formatCurrency(String(Math.abs(Number(tx.amount)))) : formatCurrency(tx.amount)}
+                          </span>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {tx.type === "income" ? getAccountName(tx.toAccountId) :
+                             tx.type === "expense" ? getAccountName(tx.fromAccountId) : ""}
+                          </p>
+                        </div>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => deleteTxMutation.mutate(tx.id)}
+                          disabled={deleteTxMutation.isPending}
+                          data-testid={`button-delete-tx-${tx.id}`}
+                        >
+                          <Trash2 className="w-4 h-4 text-muted-foreground" />
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>

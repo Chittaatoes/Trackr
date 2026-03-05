@@ -401,3 +401,15 @@ textarea,
   30%       { opacity: 0.75; transform: translateY(-1.5px); }
   60%       { opacity: 0.9;  transform: translateY(-0.5px); }
 }
+
+/* ================================================
+   Scrollbar hide utility
+   ================================================ */
+
+.scrollbar-hide {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}

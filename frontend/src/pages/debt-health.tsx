@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { CurrencyInput } from "@/components/ui/currency-input";
 import {
   Plus, Shield, Trash2, AlertTriangle, CheckCircle2, AlertCircle,
-  ChevronDown, Info, Landmark, Wallet, TrendingDown, Gauge, Pencil,
+  ChevronDown, Info, Landmark, Wallet, TrendingDown,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/constants";
 import { useToast } from "@/hooks/use-toast";
@@ -293,168 +293,6 @@ function LiabilityForm({ onClose }: { onClose: () => void }) {
         </div>
       </form>
     </Form>
-  );
-}
-
-function MonthlyIncomeCard({ currentIncome }: { currentIncome: number }) {
-  const { t } = useLanguage();
-  const { toast } = useToast();
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(currentIncome > 0 ? String(currentIncome) : "");
-
-  const mutation = useMutation({
-    mutationFn: (monthlyIncome: number) =>
-      apiRequest("PATCH", "/api/profile/monthly-income", { monthlyIncome }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/debt-health"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
-      toast({ title: t.debtHealth.monthlyIncomeSet });
-      setEditing(false);
-    },
-    onError: (error: Error) => {
-      toast({ title: t.common.error, description: error.message, variant: "destructive" });
-    },
-  });
-
-  const handleSave = () => {
-    const num = parseFloat(value);
-    if (!isNaN(num) && num > 0) {
-      mutation.mutate(num);
-    }
-  };
-
-  return (
-    <Card data-testid="card-monthly-income">
-      <CardContent className="p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Wallet className="w-4 h-4 text-muted-foreground" />
-            <span className="text-sm font-medium">{t.debtHealth.monthlyIncome}</span>
-          </div>
-          {!editing && currentIncome > 0 && (
-            <Button size="icon" variant="ghost" onClick={() => setEditing(true)} data-testid="button-edit-income">
-              <Pencil className="w-3.5 h-3.5" />
-            </Button>
-          )}
-        </div>
-        {editing || currentIncome <= 0 ? (
-          <div className="flex items-center gap-2 mt-3">
-            <CurrencyInput
-              placeholder="0"
-              value={value}
-              onChange={(v) => setValue(v)}
-              data-testid="input-monthly-income"
-              autoFocus
-            />
-            <Button
-              onClick={handleSave}
-              disabled={mutation.isPending}
-              data-testid="button-save-income"
-            >
-              {mutation.isPending ? "..." : "OK"}
-            </Button>
-            {currentIncome > 0 && (
-              <Button variant="ghost" onClick={() => setEditing(false)}>
-                {t.debtHealth.cancel}
-              </Button>
-            )}
-          </div>
-        ) : (
-          <p className="text-xl font-mono font-bold mt-2" data-testid="text-monthly-income">
-            {formatCurrency(currentIncome)}
-          </p>
-        )}
-        {currentIncome <= 0 && !editing && (
-          <p className="text-xs text-muted-foreground mt-2">{t.debtHealth.monthlyIncomePrompt}</p>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function CashflowPressureSection({ health }: { health: DebtHealthData }) {
-  const { t } = useLanguage();
-
-  const pressureLabels: Record<string, string> = {
-    stable: t.debtHealth.pressureStable,
-    moderate: t.debtHealth.pressureModerate,
-    high: t.debtHealth.pressureHigh,
-  };
-  const pressureDescs: Record<string, string> = {
-    stable: t.debtHealth.pressureStableDesc,
-    moderate: t.debtHealth.pressureModerateDesc,
-    high: t.debtHealth.pressureHighDesc,
-  };
-  const pressureColors: Record<string, { color: string; bg: string }> = {
-    stable: { color: "text-green-600 dark:text-green-400", bg: "bg-green-500/10" },
-    moderate: { color: "text-amber-600 dark:text-amber-400", bg: "bg-amber-500/10" },
-    high: { color: "text-red-500 dark:text-red-400", bg: "bg-red-500/10" },
-  };
-  const pressureIcons: Record<string, typeof CheckCircle2> = {
-    stable: CheckCircle2,
-    moderate: AlertTriangle,
-    high: AlertCircle,
-  };
-
-  const ps = health.pressureStatus;
-  const PIcon = pressureIcons[ps];
-  const pColor = pressureColors[ps];
-  const dsrClamped = Math.min(health.dsr, 100);
-
-  if (health.monthlyIncome <= 0) return null;
-
-  return (
-    <Card data-testid="card-cashflow-pressure">
-      <CardContent className="p-6 space-y-5">
-        <div className="flex items-center gap-3">
-          <div className={`w-10 h-10 rounded-md flex items-center justify-center ${pColor.bg}`}>
-            <PIcon className={`w-5 h-5 ${pColor.color}`} />
-          </div>
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <Gauge className="w-4 h-4 text-muted-foreground" />
-              <h2 className="text-base font-bold" data-testid="text-pressure-title">{t.debtHealth.monthlyPressure}</h2>
-            </div>
-            <p className={`text-sm font-semibold ${pColor.color}`} data-testid="text-pressure-status">{pressureLabels[ps]}</p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div>
-            <p className="text-[11px] text-muted-foreground">{t.debtHealth.monthlyIncome}</p>
-            <p className="font-mono font-semibold text-sm mt-0.5" data-testid="text-pressure-income">{formatCurrency(health.monthlyIncome)}</p>
-          </div>
-          <div>
-            <p className="text-[11px] text-muted-foreground">{t.debtHealth.totalInstallments}</p>
-            <p className="font-mono font-semibold text-sm mt-0.5" data-testid="text-pressure-installments">{formatCurrency(health.totalMonthlyInstallments)}</p>
-          </div>
-          <div>
-            <p className="text-[11px] text-muted-foreground">{t.debtHealth.remainingAfterDebt}</p>
-            <p className={`font-mono font-semibold text-sm mt-0.5 ${health.remainingAfterDebt < 0 ? "text-red-500" : ""}`} data-testid="text-pressure-remaining">
-              {formatCurrency(health.remainingAfterDebt)}
-            </p>
-          </div>
-          <div>
-            <p className="text-[11px] text-muted-foreground">{t.debtHealth.debtLoad}</p>
-            <p className={`font-mono font-bold text-sm mt-0.5 ${pColor.color}`} data-testid="text-pressure-dsr">
-              {Math.round(health.dsr)}%
-            </p>
-          </div>
-        </div>
-
-        <div className="space-y-1">
-          <Progress value={dsrClamped} className="h-2.5" />
-          <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-            <span>0%</span>
-            <span>30%</span>
-            <span>40%</span>
-            <span>100%</span>
-          </div>
-        </div>
-
-        <p className="text-sm text-muted-foreground leading-relaxed">{pressureDescs[ps]}</p>
-      </CardContent>
-    </Card>
   );
 }
 
@@ -758,10 +596,6 @@ export default function DebtHealth() {
           </DialogContentBottomSheet>
         </Dialog>
       </div>
-
-      <MonthlyIncomeCard currentIncome={health?.monthlyIncome ?? 0} />
-
-      {health && <CashflowPressureSection health={health} />}
 
       <div>
         <div className="flex items-center gap-2 mb-3">

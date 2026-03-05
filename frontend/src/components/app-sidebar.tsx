@@ -26,6 +26,8 @@ import {
   Globe,
   ShieldCheck,
   Award,
+  PiggyBank,
+  User,
 } from "lucide-react";
 import logoImg from "@assets/favicon_1771971850849.png";
 import {
@@ -63,6 +65,7 @@ export function AppSidebar() {
     { title: t.nav.dashboard, url: "/", icon: LayoutDashboard, feature: "core" },
     { title: t.nav.accounts, url: "/accounts", icon: Wallet, feature: "core" },
     { title: t.nav.transactions, url: "/transactions", icon: ArrowLeftRight, feature: "core" },
+    { title: (t.nav as any).budget || "Budget", url: "/budget", icon: PiggyBank, feature: "core" },
     { title: t.nav.goals, url: "/goals", icon: Target, feature: "core" },
   ];
 
@@ -70,6 +73,7 @@ export function AppSidebar() {
     { title: t.nav.debtHealth, url: "/debt", icon: Shield },
     { title: t.nav.netWorth, url: "/networth", icon: TrendingUp },
     { title: t.nav.achievements, url: "/achievements", icon: Award },
+    { title: (t.nav as any).profile || "Profile", url: "/profile", icon: User },
   ];
 
   return (

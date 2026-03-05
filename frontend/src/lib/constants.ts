@@ -46,20 +46,36 @@ export const XP_REWARDS = {
 };
 
 // === DEFAULT CATEGORIES ===
-// These appear in transaction forms alongside user's custom categories.
-// To add/remove defaults, edit these arrays.
-export const EXPENSE_CATEGORIES = [
-  "Food & Drinks",
-  "Transportation",
-  "Shopping",
-  "Entertainment",
-  "Bills & Utilities",
-  "Health",
-  "Education",
-  "Travel",
-  "Investment",
-  "Other",
-];
+// EXPENSE_CATEGORY_GROUPS drives the grouped picker UI (KEBUTUHAN / KEINGINAN).
+// EXPENSE_CATEGORIES is a flat fallback derived from those groups.
+export const EXPENSE_CATEGORY_GROUPS = [
+  {
+    groupKey: "needs",
+    items: [
+      { value: "Food & Drinks", emoji: "🍽️" },
+      { value: "Housing",       emoji: "🏠" },
+      { value: "Transportation",emoji: "🚌" },
+      { value: "Electricity",   emoji: "💡" },
+      { value: "Water",         emoji: "💧" },
+      { value: "Health",        emoji: "🏥" },
+      { value: "Education",     emoji: "🎓" },
+      { value: "Other Needs",   emoji: "📦" },
+    ],
+  },
+  {
+    groupKey: "wants",
+    items: [
+      { value: "Shopping",      emoji: "🛍️" },
+      { value: "Hangout",       emoji: "☕" },
+      { value: "Entertainment", emoji: "🎮" },
+      { value: "Snacks",        emoji: "🍩" },
+      { value: "Hobby",         emoji: "🎨" },
+      { value: "Lifestyle",     emoji: "✨" },
+    ],
+  },
+] as const;
+
+export const EXPENSE_CATEGORIES: string[] = EXPENSE_CATEGORY_GROUPS.flatMap(g => g.items.map(i => i.value));
 
 export const INCOME_CATEGORIES = [
   "Salary",

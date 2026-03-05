@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -9,12 +9,12 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { LanguageProvider } from "@/lib/i18n";
 import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
-import Onboarding from "@/features/onboarding/onboarding";
 import Dashboard from "@/pages/dashboard";
 import Accounts from "@/pages/accounts";
 import Transactions from "@/pages/transactions";
 import Goals from "@/pages/goals";
 import DebtHealth from "@/pages/debt-health";
+import BudgetPage from "@/pages/budget";
 import NetWorth from "@/pages/net-worth";
 import Achievements from "@/pages/achievements";
 import ScorePage from "@/features/score/score-page";
@@ -22,38 +22,24 @@ import Admin from "@/pages/admin";
 import ProfilePage from "@/pages/profile";
 import NotFound from "@/pages/not-found";
 import { MobileBottomNav } from "@/components/mobile-nav";
-import { AddAction } from "@/components/add-action";
 import { apiRequest } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
 
-function useOnboardingSync() {
-  const { user } = useAuth();
-
-  useEffect(() => {
-    if (!user) return;
-    const raw = localStorage.getItem("fr_onboarding");
-    if (!raw) return;
-
-    try {
-      const data = JSON.parse(raw);
-      apiRequest("POST", "/api/onboarding", data).then(() => {
-        localStorage.removeItem("fr_onboarding");
-      }).catch(() => {});
-    } catch {
-      localStorage.removeItem("fr_onboarding");
-    }
-  }, [user]);
-}
-
-function GlobalAddAction() {
+function useNavPlusHandler() {
   const [location, setLocation] = useLocation();
 
-  if (location !== "/") return null;
+  const handlePlusClick = useCallback(() => {
+    if (location !== "/") {
+      setLocation("/");
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent("fr-open-action", { detail: "expense" }));
+      }, 300);
+    } else {
+      window.dispatchEvent(new CustomEvent("fr-open-action", { detail: "expense" }));
+    }
+  }, [location, setLocation]);
 
-  const handleSelectAction = (action: string) => {
-    window.dispatchEvent(new CustomEvent("fr-open-action", { detail: action }));
-  };
-
-  return <AddAction onSelectAction={handleSelectAction} />;
+  return handlePlusClick;
 }
 
 function AuthenticatedLayout() {
@@ -62,7 +48,7 @@ function AuthenticatedLayout() {
     "--sidebar-width-icon": "3rem",
   };
 
-  useOnboardingSync();
+  const handlePlusClick = useNavPlusHandler();
 
   return (
     <SidebarProvider style={style as React.CSSProperties}>
@@ -81,6 +67,7 @@ function AuthenticatedLayout() {
               <Route path="/accounts" component={Accounts} />
               <Route path="/transactions" component={Transactions} />
               <Route path="/goals" component={Goals} />
+              <Route path="/budget" component={BudgetPage} />
               <Route path="/debt" component={DebtHealth} />
               <Route path="/networth" component={NetWorth} />
               <Route path="/achievements" component={Achievements} />
@@ -91,8 +78,7 @@ function AuthenticatedLayout() {
             </Switch>
           </main>
         </div>
-        <MobileBottomNav />
-        <GlobalAddAction />
+        <MobileBottomNav onPlusClick={handlePlusClick} />
       </div>
     </SidebarProvider>
   );
@@ -100,9 +86,18 @@ function AuthenticatedLayout() {
 
 function AppContent() {
   const { user, isLoading } = useAuth();
-  const [showOnboarding, setShowOnboarding] = useState(true);
+  const guestLoginCalled = useRef(false);
 
-  if (isLoading) {
+  useEffect(() => {
+    if (!isLoading && !user && !guestLoginCalled.current) {
+      guestLoginCalled.current = true;
+      apiRequest("POST", "/api/guest-login", {}).then(() => {
+        queryClient.invalidateQueries({ queryKey: ["user"] });
+      }).catch(() => {});
+    }
+  }, [isLoading, user]);
+
+  if (isLoading || (!user && !guestLoginCalled.current)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="space-y-4 text-center">
@@ -113,14 +108,14 @@ function AppContent() {
     );
   }
 
-  if (!user && showOnboarding) {
+  if (!user) {
     return (
-      <Onboarding
-        onComplete={() => {
-          localStorage.setItem("fr_onboarding_done", "1");
-          setShowOnboarding(false);
-        }}
-      />
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="space-y-4 text-center">
+          <Skeleton className="h-10 w-10 rounded-md mx-auto" />
+          <Skeleton className="h-4 w-32 mx-auto" />
+        </div>
+      </div>
     );
   }
 

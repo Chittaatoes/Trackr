@@ -39,10 +39,10 @@ import {
   Eye, EyeOff, X, Lightbulb, Target,
   BarChart3, Plus, Award,
   ArrowDownLeft, ArrowUpRight, ArrowLeftRight,
-  PiggyBank, CreditCard,
+  PiggyBank, CreditCard, FileText, LineChart, Camera,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatCurrency, getXpForNextLevel, EXPENSE_CATEGORIES, INCOME_CATEGORIES, getTierKey } from "@/lib/constants";
+import { formatCurrency, getXpForNextLevel, EXPENSE_CATEGORY_GROUPS, INCOME_CATEGORIES, getTierKey } from "@/lib/constants";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -57,6 +57,8 @@ import ScoreRing from "@/features/score/score-ring";
 import { MilestoneFlame, getMilestoneLevel, getMilestoneName } from "@/features/gamification/milestone-flame";
 import { LevelUpCelebration } from "@/features/gamification/level-up-celebration";
 import { SetupFirstAccountModal } from "@/components/setup-first-account-modal";
+import { MonthlyActivityCalendar } from "@/components/monthly-activity-calendar";
+import { ScanPanel } from "@/components/scan-panel";
 
 // === DASHBOARD API RESPONSE TYPES ===
 // These interfaces match the JSON returned by /api/dashboard, /api/smart-save, /api/spending-insight
@@ -524,8 +526,7 @@ function TransactionForm({
     },
   });
 
-  const watchType = form.watch("type");
-  const defaultCategories = watchType === "income" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+  const watchType = txType;
   const userCategories = customCategories?.filter(c => c.type === watchType) || [];
 
   const mutation = useMutation({
@@ -551,6 +552,7 @@ function TransactionForm({
       queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/finance-score"] });
       queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string)?.startsWith("/api/spending-insight") });
       queryClient.invalidateQueries({ queryKey: ["/api/daily-focus"] });
       toast({ title: t.transactions.submit, description: "+5 XP" });
@@ -566,12 +568,6 @@ function TransactionForm({
       toast({ title: t.common.error, description: error.message, variant: "destructive" });
     },
   });
-
-  const typeLabels: Record<string, string> = {
-    income: t.transactions.income,
-    expense: t.transactions.expense,
-    transfer: t.transactions.transfer,
-  };
 
   const watchFromAccountId = form.watch("fromAccountId");
   const watchAmount = form.watch("amount");
@@ -600,40 +596,7 @@ function TransactionForm({
         }
         mutation.mutate(data);
       })} className="flex flex-col max-md:flex-1 max-md:min-h-0">
-        <div className="space-y-5 px-6 max-md:px-6 md:px-0 max-md:flex-1 max-md:overflow-y-auto max-md:pb-4">
-          <FormField
-            control={form.control}
-            name="type"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t.transactions.type}</FormLabel>
-                <div className="flex rounded-md border border-border p-1 gap-1 bg-muted/40" role="group" aria-label={t.transactions.type}>
-                  {(["income", "expense", "transfer"] as const).map((tp) => (
-                    <button
-                      key={tp}
-                      type="button"
-                      role="radio"
-                      aria-checked={field.value === tp}
-                      className={cn(
-                        "flex-1 flex items-center justify-center gap-1.5 rounded-sm py-2.5 text-sm font-medium transition-all duration-150",
-                        field.value === tp
-                          ? "bg-background shadow-sm text-foreground"
-                          : "text-muted-foreground"
-                      )}
-                      onClick={() => field.onChange(tp)}
-                      data-testid={`button-quick-type-${tp}`}
-                    >
-                      {tp === "income" && <ArrowDownLeft className="w-4 h-4" />}
-                      {tp === "expense" && <ArrowUpRight className="w-4 h-4" />}
-                      {tp === "transfer" && <ArrowLeftRight className="w-4 h-4" />}
-                      {typeLabels[tp]}
-                    </button>
-                  ))}
-                </div>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+        <div className="space-y-5 px-6 max-md:px-6 md:px-0 max-md:flex-1 max-md:overflow-y-auto scrollbar-hide max-md:pb-4">
           <FormField
             control={form.control}
             name="amount"
@@ -745,13 +708,29 @@ function TransactionForm({
                         <SelectValue placeholder={t.transactions.selectCategory} />
                       </SelectTrigger>
                     </FormControl>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectLabel>{t.transactions.defaultCategories}</SelectLabel>
-                        {defaultCategories.map((c) => (
-                          <SelectItem key={c} value={c}>{(t.categories as Record<string, string>)[c] || c}</SelectItem>
-                        ))}
-                      </SelectGroup>
+                    <SelectContent className="max-h-72">
+                      {watchType === "income" ? (
+                        <SelectGroup>
+                          <SelectLabel>{t.transactions.defaultCategories}</SelectLabel>
+                          {INCOME_CATEGORIES.map((c) => (
+                            <SelectItem key={c} value={c}>{(t.categories as Record<string, string>)[c] || c}</SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ) : (
+                        EXPENSE_CATEGORY_GROUPS.map((group) => (
+                          <SelectGroup key={group.groupKey}>
+                            <SelectLabel className="text-xs font-semibold uppercase tracking-widest">
+                              {group.groupKey === "needs" ? t.transactions.needsGroup : t.transactions.wantsGroup}
+                            </SelectLabel>
+                            {group.items.map((item) => (
+                              <SelectItem key={item.value} value={item.value}>
+                                <span className="mr-2">{item.emoji}</span>
+                                {(t.categories as Record<string, string>)[item.value] || item.value}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        ))
+                      )}
                       {userCategories.length > 0 && (
                         <>
                           <SelectSeparator />
@@ -837,6 +816,7 @@ function SavingsForm({ onClose, t }: { onClose: () => void; t: any }) {
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
       queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/finance-score"] });
       queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string)?.startsWith("/api/spending-insight") });
       toast({ title: t.dashboard.savingsRecorded, description: "+8 XP" });
       form.reset();
@@ -875,7 +855,7 @@ function SavingsForm({ onClose, t }: { onClose: () => void; t: any }) {
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit((data) => mutation.mutate(data))} className="flex flex-col max-md:flex-1 max-md:min-h-0">
-        <div className="space-y-5 px-6 max-md:px-6 md:px-0 max-md:flex-1 max-md:overflow-y-auto max-md:pb-4">
+        <div className="space-y-5 px-6 max-md:px-6 md:px-0 max-md:flex-1 max-md:overflow-y-auto scrollbar-hide max-md:pb-4">
           <FormField
             control={form.control}
             name="goalId"
@@ -1010,6 +990,7 @@ function DebtPaymentForm({ onClose, t }: { onClose: () => void; t: any }) {
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
       queryClient.invalidateQueries({ queryKey: ["/api/transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/finance-score"] });
       queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string)?.startsWith("/api/spending-insight") });
       queryClient.invalidateQueries({ predicate: (q) => (q.queryKey[0] as string)?.startsWith("/api/debt-health") });
       toast({ title: t.dashboard.debtPaymentRecorded, description: "+8 XP" });
@@ -1055,7 +1036,7 @@ function DebtPaymentForm({ onClose, t }: { onClose: () => void; t: any }) {
         }
         mutation.mutate(data);
       })} className="flex flex-col max-md:flex-1 max-md:min-h-0">
-        <div className="space-y-5 px-6 max-md:px-6 md:px-0 max-md:flex-1 max-md:overflow-y-auto max-md:pb-4">
+        <div className="space-y-5 px-6 max-md:px-6 md:px-0 max-md:flex-1 max-md:overflow-y-auto scrollbar-hide max-md:pb-4">
           <FormField
             control={form.control}
             name="liabilityId"
@@ -1159,92 +1140,136 @@ function DebtPaymentForm({ onClose, t }: { onClose: () => void; t: any }) {
   );
 }
 
+type TxTabType = "expense" | "income" | "transfer" | "savings" | "debt_payment";
+
+const TX_TABS: { type: TxTabType; icon: typeof ArrowUpRight; labelKey: string; color: string; activeBg: string; iconBg: string }[] = [
+  { type: "expense", icon: ArrowUpRight, labelKey: "actionExpense", color: "text-red-500 dark:text-red-400", activeBg: "bg-red-500/15", iconBg: "bg-red-500/10" },
+  { type: "income", icon: ArrowDownLeft, labelKey: "actionIncome", color: "text-green-600 dark:text-green-400", activeBg: "bg-green-500/15", iconBg: "bg-green-500/10" },
+  { type: "transfer", icon: ArrowLeftRight, labelKey: "actionTransfer", color: "text-blue-500 dark:text-blue-400", activeBg: "bg-blue-500/15", iconBg: "bg-blue-500/10" },
+  { type: "savings", icon: PiggyBank, labelKey: "actionSavings", color: "text-teal-600 dark:text-teal-400", activeBg: "bg-teal-500/15", iconBg: "bg-teal-500/10" },
+  { type: "debt_payment", icon: CreditCard, labelKey: "actionDebtPayment", color: "text-orange-600 dark:text-orange-400", activeBg: "bg-orange-500/15", iconBg: "bg-orange-500/10" },
+];
+
+function TypeTabSelector({ current, onChange, t }: { current: TxTabType; onChange: (t: TxTabType) => void; t: any }) {
+  const row1 = TX_TABS.slice(0, 3);
+  const row2 = TX_TABS.slice(3);
+  const renderTab = (tab: typeof TX_TABS[0]) => {
+    const Icon = tab.icon;
+    const active = current === tab.type;
+    return (
+      <button
+        key={tab.type}
+        type="button"
+        onClick={() => onChange(tab.type)}
+        className={cn(
+          "flex-1 flex flex-col items-center gap-1 py-2.5 rounded-xl transition-all duration-150 select-none",
+          active ? tab.activeBg : "hover:bg-muted/50"
+        )}
+        data-testid={`button-tab-${tab.type}`}
+      >
+        <div className={cn("rounded-lg p-1.5 transition-colors", active ? tab.iconBg : "bg-muted/30")}>
+          <Icon className={cn("w-4 h-4 transition-colors", active ? tab.color : "text-muted-foreground")} />
+        </div>
+        <span className={cn("text-[10px] font-medium leading-none transition-colors", active ? tab.color : "text-muted-foreground")}>
+          {(t.dashboard as any)[tab.labelKey]}
+        </span>
+      </button>
+    );
+  };
+  return (
+    <div className="px-6 md:px-0 space-y-1.5 pb-2">
+      <div className="flex gap-1.5">{row1.map(renderTab)}</div>
+      <div className="flex gap-1.5 justify-center">
+        {row2.map(tab => {
+          const Icon = tab.icon;
+          const active = current === tab.type;
+          return (
+            <button
+              key={tab.type}
+              type="button"
+              onClick={() => onChange(tab.type)}
+              style={{ width: "calc((100% - 8px) / 3)" }}
+              className={cn(
+                "flex flex-col items-center gap-1 py-2.5 rounded-xl transition-all duration-150 select-none",
+                active ? tab.activeBg : "hover:bg-muted/50"
+              )}
+              data-testid={`button-tab-${tab.type}`}
+            >
+              <div className={cn("rounded-lg p-1.5 transition-colors", active ? tab.iconBg : "bg-muted/30")}>
+                <Icon className={cn("w-4 h-4 transition-colors", active ? tab.color : "text-muted-foreground")} />
+              </div>
+              <span className={cn("text-[10px] font-medium leading-none transition-colors", active ? tab.color : "text-muted-foreground")}>
+                {(t.dashboard as any)[tab.labelKey]}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function AddActionDialog({ open, onClose, t, onStreakTriggered, initialAction }: { open: boolean; onClose: () => void; t: any; onStreakTriggered?: () => void; initialAction?: ActionType | null }) {
-  const [selectedAction, setSelectedAction] = useState<ActionType | null>(null);
-  const { toast } = useToast();
+  const [selectedTab, setSelectedTab] = useState<TxTabType>("expense");
+  const [scanMode, setScanMode] = useState(false);
 
   useEffect(() => {
-    if (open && initialAction) {
-      setSelectedAction(initialAction);
+    if (open) {
+      const validTabs: TxTabType[] = ["income", "expense", "transfer", "savings", "debt_payment"];
+      setSelectedTab(validTabs.includes(initialAction as TxTabType) ? (initialAction as TxTabType) : "expense");
+      setScanMode(false);
     }
   }, [open, initialAction]);
 
   const handleClose = () => {
-    setSelectedAction(null);
+    setScanMode(false);
     onClose();
     if (onStreakTriggered) onStreakTriggered();
-  };
-
-  const handleBack = () => setSelectedAction(null);
-
-  const actionTitles: Record<ActionType, string> = {
-    income: t.dashboard.actionIncome,
-    expense: t.dashboard.actionExpense,
-    transfer: t.dashboard.actionTransfer,
-    savings: t.dashboard.actionSavings,
-    debt_payment: t.dashboard.actionDebtPayment,
-    no_spend: t.dashboard.actionNoSpend,
-  };
-
-  const noSpendMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/no-spending"),
-    onSuccess: () => {
-      playSound("transaction");
-      queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/daily-focus"] });
-      toast({ title: "Recorded!", description: "No spending today. +5 XP earned!" });
-      handleClose();
-    },
-    onError: (error: Error) => {
-      toast({ title: t.common.error, description: error.message, variant: "destructive" });
-    },
-  });
-
-  const handleSelect = (action: ActionType) => {
-    if (action === "no_spend") {
-      noSpendMutation.mutate();
-      return;
-    }
-    setSelectedAction(action);
   };
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
       <DialogContentBottomSheet>
-        <DialogHeader className="px-6 max-md:px-6 md:px-0 pt-1 md:pt-0">
-          {selectedAction ? (
-            <>
-              <div className="flex items-center gap-2">
-                <Button size="icon" variant="ghost" onClick={handleBack} data-testid="button-action-back">
-                  <ArrowDownLeft className="w-4 h-4 rotate-45" />
-                </Button>
-                <DialogTitle className="text-lg">{actionTitles[selectedAction]}</DialogTitle>
-              </div>
-              <DialogDescription>{t.transactions.dialogDesc}</DialogDescription>
-            </>
-          ) : (
-            <>
-              <DialogTitle className="text-lg">{t.dashboard.addActionTitle}</DialogTitle>
-              <DialogDescription>{t.dashboard.addActionDesc}</DialogDescription>
-            </>
-          )}
+        <DialogHeader className="px-6 max-md:px-6 md:px-0 pt-1 md:pt-0 shrink-0">
+          <DialogTitle className="text-lg">{t.dashboard.addActionTitle}</DialogTitle>
+          <DialogDescription>{t.transactions.dialogDesc}</DialogDescription>
         </DialogHeader>
 
-        {!selectedAction && (
-          <ActionPickerMenu onSelect={handleSelect} t={t} />
-        )}
+        {scanMode ? (
+          <ScanPanel onBack={() => setScanMode(false)} onSave={handleClose} />
+        ) : (
+          <>
+            <TypeTabSelector current={selectedTab} onChange={setSelectedTab} t={t} />
 
-        {selectedAction && (selectedAction === "income" || selectedAction === "expense" || selectedAction === "transfer") && (
-          <TransactionForm txType={selectedAction} onClose={handleClose} t={t} />
-        )}
+            {(selectedTab === "income" || selectedTab === "expense" || selectedTab === "transfer") && (
+              <TransactionForm key={selectedTab} txType={selectedTab} onClose={handleClose} t={t} />
+            )}
 
-        {selectedAction === "savings" && (
-          <SavingsForm onClose={handleClose} t={t} />
-        )}
+            {selectedTab === "savings" && (
+              <SavingsForm key="savings" onClose={handleClose} t={t} />
+            )}
 
-        {selectedAction === "debt_payment" && (
-          <DebtPaymentForm onClose={handleClose} t={t} />
+            {selectedTab === "debt_payment" && (
+              <DebtPaymentForm key="debt_payment" onClose={handleClose} t={t} />
+            )}
+
+            <div className="shrink-0 px-6 max-md:px-6 md:px-0 pb-4 pt-2 border-t border-border/40">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1.5">Cara Cepat</p>
+              <button
+                type="button"
+                onClick={() => setScanMode(true)}
+                className="w-full flex items-center gap-2.5 py-2 px-3 rounded-xl border border-dashed border-border hover:bg-violet-500/5 hover:border-violet-400/40 transition-colors group"
+              >
+                <div className="w-7 h-7 rounded-lg bg-violet-500/10 flex items-center justify-center group-hover:bg-violet-500/15 transition-colors shrink-0">
+                  <Camera className="w-3.5 h-3.5 text-violet-500" />
+                </div>
+                <div className="text-left">
+                  <p className="text-xs font-semibold text-foreground">📷 Scan Struk</p>
+                  <p className="text-[10px] text-muted-foreground leading-tight">Foto struk, transaksi otomatis</p>
+                </div>
+              </button>
+            </div>
+          </>
         )}
       </DialogContentBottomSheet>
     </Dialog>
@@ -1577,6 +1602,35 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
+      {/* Menu Utama — quick access grid */}
+      <Card data-testid="card-main-menu">
+        <CardContent className="p-5">
+          <h3 className="text-xs font-semibold text-muted-foreground mb-4 uppercase tracking-widest">{(t as any).mainMenu?.title || "Main Menu"}</h3>
+          <div className="grid grid-cols-5 gap-2">
+            {[
+              { key: "budget", icon: PiggyBank, path: "/budget", color: "text-emerald-600 dark:text-emerald-400", bg: "bg-emerald-500/10 dark:bg-emerald-500/15" },
+              { key: "goals", icon: Target, path: "/goals", color: "text-amber-600 dark:text-amber-400", bg: "bg-amber-500/10 dark:bg-amber-500/15" },
+              { key: "debt", icon: CreditCard, path: "/debt", color: "text-rose-600 dark:text-rose-400", bg: "bg-rose-500/10 dark:bg-rose-500/15" },
+              { key: "asset", icon: TrendingUp, path: "/networth", color: "text-sky-600 dark:text-sky-400", bg: "bg-sky-500/10 dark:bg-sky-500/15" },
+              { key: "reports", icon: LineChart, path: "/score", color: "text-violet-600 dark:text-violet-400", bg: "bg-violet-500/10 dark:bg-violet-500/15" },
+            ].map((item) => {
+              const Icon = item.icon;
+              const label = (t as any).mainMenu?.[item.key] || item.key;
+              return (
+                <Link key={item.key} href={item.path} data-testid={`menu-${item.key}`}>
+                  <div className="flex flex-col items-center gap-2 group cursor-pointer">
+                    <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-200 group-hover:scale-105 group-active:scale-95", item.bg)}>
+                      <Icon className={cn("w-5 h-5", item.color)} strokeWidth={2} />
+                    </div>
+                    <span className="text-[10px] font-medium text-muted-foreground text-center leading-tight group-hover:text-foreground transition-colors duration-200">{label}</span>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
       {/* 4. Smart Save — compact inline banner below hero */}
       <SmartSaveAlert t={t} />
 
@@ -1627,6 +1681,9 @@ export default function Dashboard() {
 
       {/* 6. Spending Insight */}
       <SpendingInsightSection t={t} />
+
+      {/* 7. Monthly Activity Calendar */}
+      <MonthlyActivityCalendar />
 
       <SetupFirstAccountModal
         open={setupAccountOpen}
